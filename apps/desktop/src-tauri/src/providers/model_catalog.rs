@@ -19,7 +19,7 @@ use toml_edit::{value, DocumentMut};
 
 const MAX_MAPPINGS: usize = 64;
 const MAX_NAME_CHARS: usize = 200;
-const MAX_CONTEXT_WINDOW: i64 = 10_000_000;
+pub(crate) const MAX_CONTEXT_WINDOW: i64 = 10_000_000;
 const DEFAULT_CONTEXT_WINDOW: i64 = 128_000;
 const OWNED_DIRECTORY: &str = ".codex-x";
 const CATALOG_DIRECTORY: &str = "model-catalogs";
@@ -39,6 +39,10 @@ pub(crate) struct ProviderModelMapping {
     pub(crate) display_name: String,
     #[serde(default)]
     pub(crate) context_window: Option<i64>,
+    /// Share of this model's window that triggers auto compaction, so switching
+    /// models keeps each one's own limit instead of one global number.
+    #[serde(default)]
+    pub(crate) compact_percent: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -91,11 +95,17 @@ pub(crate) fn normalize_mappings(
                 "模型上下文窗口须为 1 至 {MAX_CONTEXT_WINDOW} 之间的整数"
             )));
         }
+        if row.compact_percent.is_some_and(|p| !(1..=99).contains(&p)) {
+            return Err(CodexxError::Config(
+                "模型自动压缩比例须为 1 至 99 之间的整数".to_string(),
+            ));
+        }
         if seen.insert(model.clone()) {
             normalized.push(ProviderModelMapping {
                 model,
                 display_name,
                 context_window: row.context_window,
+                compact_percent: row.compact_percent,
             });
         }
     }
@@ -111,6 +121,7 @@ pub(crate) fn normalize_mappings(
                 display_name: default_model.clone(),
                 model: default_model,
                 context_window: None,
+                compact_percent: None,
             },
         );
     }
@@ -119,6 +130,11 @@ pub(crate) fn normalize_mappings(
 
 fn model_entry(mapping: &ProviderModelMapping, priority: usize, default_context: i64) -> Value {
     let context_window = mapping.context_window.unwrap_or(default_context);
+    // Codex reads a compaction limit per model, so each menu entry carries its own
+    // number instead of every model sharing the one root-level scalar.
+    let auto_compact_token_limit = mapping
+        .compact_percent
+        .map(|percent| context_window * percent / 100);
     // Schema: openai/codex rust-v0.153.4, protocol/src/openai_models.rs,
     // ModelInfo + ModelsResponse. Keep legacy required fields for older Codex.
     // Unlike cloning a GPT cache entry, this does not import proprietary model
@@ -152,6 +168,7 @@ fn model_entry(mapping: &ProviderModelMapping, priority: usize, default_context:
         "supports_image_detail_original": false,
         "context_window": context_window,
         "max_context_window": context_window,
+        "auto_compact_token_limit": auto_compact_token_limit,
         "effective_context_window_percent": 95,
         "experimental_supported_tools": [],
         "input_modalities": ["text", "image"],
@@ -438,6 +455,7 @@ pub(crate) fn upgrade_owned_model_catalog(codex_dir: &Path) -> Result<bool> {
             model: String::new(),
             display_name: String::new(),
             context_window: None,
+            compact_percent: None,
         },
         0,
         DEFAULT_CONTEXT_WINDOW,
@@ -501,6 +519,20 @@ mod tests {
             model: model.into(),
             display_name: display_name.into(),
             context_window: context,
+            compact_percent: None,
+        }
+    }
+    fn mapping_share(
+        model: &str,
+        display_name: &str,
+        context: Option<i64>,
+        percent: Option<i64>,
+    ) -> ProviderModelMapping {
+        ProviderModelMapping {
+            model: model.into(),
+            display_name: display_name.into(),
+            context_window: context,
+            compact_percent: percent,
         }
     }
     fn path(doc: &DocumentMut) -> PathBuf {
@@ -605,14 +637,20 @@ mod tests {
     }
 
     #[test]
-    fn serialized_mapping_allows_omitted_display_name_and_context() {
+    fn serialized_mapping_allows_omitted_display_name_context_and_compaction_share() {
         let mapping: ProviderModelMapping =
             serde_json::from_str(r#"{"model":"deepseek-chat"}"#).unwrap();
         let normalized = normalize_mappings(&[mapping], "deepseek-chat").unwrap();
         assert_eq!(
             serde_json::to_value(&normalized[0]).unwrap(),
-            json!({"model":"deepseek-chat","displayName":"deepseek-chat","contextWindow":null})
+            json!({"model":"deepseek-chat","displayName":"deepseek-chat","contextWindow":null,"compactPercent":null})
         );
+        // A record written before this field existed still reads back, so no
+        // stored provider needs a migration to keep its menu.
+        let legacy: ProviderModelMapping =
+            serde_json::from_str(r#"{"model":"m","displayName":"M","contextWindow":128000}"#)
+                .unwrap();
+        assert_eq!(legacy.compact_percent, None);
     }
 
     #[test]
@@ -944,6 +982,46 @@ wire_api = "responses"
                 unverified
             );
         }
+    }
+
+    #[test]
+    fn every_menu_entry_carries_its_own_compaction_threshold() {
+        let rows = [
+            mapping_share("big", "Big", Some(524_288), Some(75)),
+            mapping_share("small", "Small", Some(128_000), Some(90)),
+            mapping("unbounded", "Unbounded", Some(64_000)),
+        ];
+        let doc: DocumentMut = String::new().parse().unwrap();
+        let catalog = build_catalog(&rows, &doc);
+        assert_eq!(catalog["models"][0]["auto_compact_token_limit"], 393_216);
+        assert_eq!(catalog["models"][1]["auto_compact_token_limit"], 115_200);
+        assert!(
+            catalog["models"][2]["auto_compact_token_limit"].is_null(),
+            "no share means Codex keeps its own default for that model"
+        );
+    }
+
+    #[test]
+    fn a_compaction_share_outside_one_to_ninety_nine_is_rejected() {
+        for percent in [0, 100, 1_000] {
+            let rows = [ProviderModelMapping {
+                model: "m".into(),
+                display_name: "M".into(),
+                context_window: Some(1_000),
+                compact_percent: Some(percent),
+            }];
+            assert!(normalize_mappings(&rows, "m").is_err(), "{percent}");
+        }
+        let rows = [ProviderModelMapping {
+            model: "m".into(),
+            display_name: "M".into(),
+            context_window: Some(1_000),
+            compact_percent: Some(75),
+        }];
+        assert_eq!(
+            normalize_mappings(&rows, "m").unwrap()[0].compact_percent,
+            Some(75)
+        );
     }
 
     #[test]

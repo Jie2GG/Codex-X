@@ -27,6 +27,7 @@ pub(crate) struct ProviderConnectionResult {
 pub(crate) struct ProviderModel {
     pub(crate) id: String,
     pub(crate) created: Option<i64>,
+    pub(crate) context_window: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -47,6 +48,10 @@ struct ModelPayload {
     id: String,
     #[serde(default)]
     created: Option<serde_json::Value>,
+    /// Context-window hints reach us under different names per vendor, so every
+    /// remaining member is kept raw and probed in a fixed priority order.
+    #[serde(flatten)]
+    extra: HashMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -60,6 +65,8 @@ struct GeminiModelPayload {
     name: String,
     #[serde(default)]
     supported_generation_methods: Vec<String>,
+    #[serde(default)]
+    input_token_limit: Option<serde_json::Value>,
 }
 
 enum ProviderModelsAttempt {
@@ -205,6 +212,57 @@ fn provider_models_headers(config_text: Option<&str>) -> Result<HeaderMap> {
     provider_models_headers_with_env(config_text, |name| std::env::var(name).ok())
 }
 
+/// Gemini reports its input budget under this member; every other vendor label is
+/// only ever read from the flattened payload.
+const GEMINI_INPUT_TOKEN_LIMIT_KEY: &str = "inputTokenLimit";
+
+/// Ordered candidates for a model's context window. The first one that lands
+/// inside the range `model_catalog` already accepts wins; anything else stays
+/// unset so the user fills it in by hand instead of trusting a bogus number.
+const CONTEXT_WINDOW_KEYS: &[&str] = &[
+    "context_window",
+    "context_length",
+    "n_ctx",
+    "max_input_tokens",
+    GEMINI_INPUT_TOKEN_LIMIT_KEY,
+    "max_context_tokens",
+    "max_tokens",
+];
+
+/// Local runtimes such as llama.cpp style gateways report `n_ctx` one level down
+/// inside a `meta` object instead of beside the model id, so the same candidate
+/// list is consulted there once the flat payload comes up empty. A top level
+/// number still wins, because that is where the standard vendors put it.
+const CONTEXT_WINDOW_CONTAINERS: &[&str] = &["meta"];
+
+fn context_window_in(source: &serde_json::Value) -> Option<i64> {
+    CONTEXT_WINDOW_KEYS.iter().find_map(|key| {
+        source
+            .get(*key)
+            .and_then(|value| {
+                value.as_i64().or_else(|| {
+                    value
+                        .as_str()
+                        .and_then(|text| text.trim().parse::<i64>().ok())
+                })
+            })
+            .filter(|window| (1..=super::model_catalog::MAX_CONTEXT_WINDOW).contains(window))
+    })
+}
+
+fn extract_context_window(extra: &HashMap<String, serde_json::Value>) -> Option<i64> {
+    let flattened: serde_json::Map<String, serde_json::Value> = extra
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    let flattened = serde_json::Value::Object(flattened);
+    context_window_in(&flattened).or_else(|| {
+        CONTEXT_WINDOW_CONTAINERS
+            .iter()
+            .find_map(|name| flattened.get(*name).and_then(context_window_in))
+    })
+}
+
 fn parse_created(value: Option<serde_json::Value>) -> Option<i64> {
     value.and_then(|value| {
         value
@@ -288,14 +346,25 @@ fn parse_models_with_protocol(body: &str, protocol: UpstreamApi) -> Result<Vec<P
                 .iter()
                 .any(|method| method == "generateContent")
         })
-        .map(|model| ModelPayload {
-            id: model
-                .name
-                .trim()
-                .strip_prefix("models/")
-                .unwrap_or(model.name.trim())
-                .to_string(),
-            created: None,
+        .map(|model| {
+            let extra = model
+                .input_token_limit
+                .map(|limit| {
+                    [(GEMINI_INPUT_TOKEN_LIMIT_KEY.to_string(), limit)]
+                        .into_iter()
+                        .collect()
+                })
+                .unwrap_or_default();
+            ModelPayload {
+                id: model
+                    .name
+                    .trim()
+                    .strip_prefix("models/")
+                    .unwrap_or(model.name.trim())
+                    .to_string(),
+                created: None,
+                extra,
+            }
         })
         .collect();
     Ok(normalize_models(models))
@@ -311,9 +380,13 @@ fn normalize_models(payload: Vec<ModelPayload>) -> Vec<ProviderModel> {
             continue;
         }
         let created = parse_created(model.created);
+        let context_window = extract_context_window(&model.extra);
         if let Some(index) = indexes.get(id).copied() {
             if created > models[index].created {
                 models[index].created = created;
+            }
+            if models[index].context_window.is_none() {
+                models[index].context_window = context_window;
             }
             continue;
         }
@@ -321,6 +394,7 @@ fn normalize_models(payload: Vec<ModelPayload>) -> Vec<ProviderModel> {
         models.push(ProviderModel {
             id: id.to_string(),
             created,
+            context_window,
         });
     }
 
@@ -360,18 +434,14 @@ fn request_provider_models_with_protocol_client(
     request_provider_models_with_headers(client, base_url, api_key, protocol, headers)
 }
 
-fn request_provider_models_with_headers(
-    client: &Client,
-    base_url: &str,
-    api_key: Option<&str>,
+/// Attach the credential for this protocol, unless the provider already ships an
+/// auth header of its own.
+fn with_provider_auth(
+    mut request: reqwest::blocking::RequestBuilder,
     protocol: UpstreamApi,
-    headers: HeaderMap,
-) -> Result<ProviderModelsAttempt> {
-    let url = provider_models_url_with_protocol(base_url, protocol)?;
-    let source = RemoteSource::new(MODELS_SOURCE_KEY, url.as_str(), Some("application/json"));
-    let mut request = client
-        .get(url.as_str())
-        .header(reqwest::header::ACCEPT, "application/json");
+    api_key: Option<&str>,
+    headers: &HeaderMap,
+) -> Result<reqwest::blocking::RequestBuilder> {
     if protocol == UpstreamApi::AnthropicMessages {
         request = request.header("anthropic-version", "2023-06-01");
     }
@@ -394,7 +464,26 @@ fn request_provider_models_with_headers(
         value.set_sensitive(true);
         request = request.header(name, value);
     }
-    request = request.headers(headers);
+    Ok(request.headers(headers.clone()))
+}
+
+fn request_provider_models_with_headers(
+    client: &Client,
+    base_url: &str,
+    api_key: Option<&str>,
+    protocol: UpstreamApi,
+    headers: HeaderMap,
+) -> Result<ProviderModelsAttempt> {
+    let url = provider_models_url_with_protocol(base_url, protocol)?;
+    let source = RemoteSource::new(MODELS_SOURCE_KEY, url.as_str(), Some("application/json"));
+    let request = with_provider_auth(
+        client
+            .get(url.as_str())
+            .header(reqwest::header::ACCEPT, "application/json"),
+        protocol,
+        api_key,
+        &headers,
+    )?;
 
     let started = Instant::now();
     let response = request
@@ -545,6 +634,79 @@ mod tests {
     }
 
     #[test]
+    fn context_window_candidates_follow_a_fixed_priority() {
+        for (body, expected) in [
+            (
+                r#"{"data":[{"id":"m","context_window":200000}]}"#,
+                Some(200_000),
+            ),
+            (
+                r#"{"data":[{"id":"m","context_length":128000}]}"#,
+                Some(128_000),
+            ),
+            (
+                r#"{"data":[{"id":"m","max_input_tokens":65536}]}"#,
+                Some(65_536),
+            ),
+            (
+                r#"{"data":[{"id":"m","inputTokenLimit":"32768"}]}"#,
+                Some(32_768),
+            ),
+            (r#"{"data":[{"id":"m","max_tokens":8192}]}"#, Some(8_192)),
+            (r#"{"data":[{"id":"m"}]}"#, None),
+            (
+                r#"{"data":[{"id":"m","context_window":0,"max_tokens":8192}]}"#,
+                Some(8_192),
+            ),
+            (
+                r#"{"data":[{"id":"m","context_window":99999999,"max_tokens":8192}]}"#,
+                Some(8_192),
+            ),
+            (r#"{"data":[{"id":"m","context_window":-5}]}"#, None),
+            (
+                r#"{"data":[{"id":"m","context_window":200000,"max_tokens":8192}]}"#,
+                Some(200_000),
+            ),
+            (r#"{"data":[{"id":"m","n_ctx":131072}]}"#, Some(131_072)),
+            (
+                r#"{"data":[{"id":"m","meta":{"n_ctx":786432}}]}"#,
+                Some(786_432),
+            ),
+            (
+                r#"{"data":[{"id":"m","meta":{"n_ctx":"786432"}}]}"#,
+                Some(786_432),
+            ),
+            (r#"{"data":[{"id":"m","meta":{"n_ctx":0}}]}"#, None),
+            (
+                r#"{"data":[{"id":"m","context_window":200000,"meta":{"n_ctx":786432}}]}"#,
+                Some(200_000),
+            ),
+            // A real llama.cpp style gateway response, unrelated members and all.
+            (
+                r#"{"object":"list","data":[{"id":"Qwen3.8-Flash-Next","object":"model","status":{"value":"loaded"},"meta":{"n_ctx":786432},"architecture":{"input_modalities":["text","image"],"output_modalities":["text"]}}]}"#,
+                Some(786_432),
+            ),
+        ] {
+            let models = parse_models(body).expect("parse models");
+            assert_eq!(models.len(), 1, "{body}");
+            assert_eq!(models[0].context_window, expected, "{body}");
+        }
+    }
+
+    #[test]
+    fn gemini_input_token_limit_becomes_the_context_window() {
+        let models = parse_models_with_protocol(
+            r#"{"models":[{"name":"models/gemini-3-pro","inputTokenLimit":1048576,"supportedGenerationMethods":["generateContent"]}]}"#,
+            UpstreamApi::Gemini,
+        )
+        .expect("parse gemini models");
+
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "gemini-3-pro");
+        assert_eq!(models[0].context_window, Some(1_048_576));
+    }
+
+    #[test]
     fn models_url_adds_exactly_one_v1_segment() {
         for (base, expected) in [
             ("https://example.com", "https://example.com/v1/models"),
@@ -579,10 +741,12 @@ mod tests {
                 ProviderModel {
                     id: "gpt-5.6-sol".to_string(),
                     created: Some(30),
+                    context_window: None,
                 },
                 ProviderModel {
                     id: "gpt-5.5".to_string(),
                     created: Some(10),
+                    context_window: None,
                 },
             ]
         );

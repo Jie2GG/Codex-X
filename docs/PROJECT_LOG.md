@@ -8,6 +8,31 @@
 
 日志不得包含 Token、认证文件内容、用户数据或仅适用于某台电脑的隐私路径。
 
+## 2026-10-15：模型菜单接管上下文窗口与压缩阈值
+
+- 用户在 config.toml 根级手动写入 model_context_window、model_auto_compact_token_limit 与 model_auto_compact_token_limit_scope，Codex 界面正常显示，但根级是全局单值：切换模型时所有模型共用同一窗口与同一阈值，无法各自保留。model_auto_compact_token_limit 在 provider 白名单内，模板缺失即从 live 删除，而 scope 不在白名单内会原样留下，两者因此可能不一致。
+- 实测内网网关 /v1/models 返回 data[].meta.n_ctx = 786432：上下文长度既不在模型对象顶层、字段名也不在候选链里，因此获取列表后窗口仍是空的。CONTEXT_WINDOW_KEYS 增加 n_ctx，位置排在 context_length 之后、max_input_tokens 之前；另新增一级嵌套容器白名单 meta，仅在顶层完全取不到时才进入，顶层数值仍然优先，以免标准供应商被嵌套值盖掉。真实响应原样固化为测试用例。
+- 用 codex debug models 实测确认 Codex 的 ModelInfo 支持 per-model auto_compact_token_limit：目录条目塞入该字段后原样回显，字段表位于 max_context_window 与 effective_context_window_percent 之间。此前 model_entry 从不写它，压缩阈值只能落到根级单值。
+- ProviderModelMapping 新增 compact_percent，serde default 使旧 JSON 记录无需迁移即可读取。model_entry 按该行 context_window 乘以百分比写入 auto_compact_token_limit，留空输出 null 交给 Codex 默认。比例校验 1 至 99，与上下文窗口同样在行内显示错误并阻止保存。
+- 存在模型映射时 provider_template_from_document 剔除根级 model_context_window 与 model_auto_compact_token_limit。根级标量会覆盖目录里的 per-model 值，两者不能同时生效，因此必须让目录独占；没有映射时根级写法保持原样。scope 不在白名单内，既不进入模板也不被合并改动。
+- 「开启 1M 上下文窗口」在存在模型映射时禁用，并在配置预览区提示窗口与比例已按模型分别设置，避免根级预设与 per-model 数值互相矛盾。
+- 验证：769 项串行 Rust 测试、170 项 Node 测试、类型检查与 renderer 构建通过。新增测试覆盖每个菜单条目携带自己的压缩阈值、比例范围校验、旧记录缺少该字段仍可读、有映射时模板剔除两个根级标量、无映射时保持原样、映射区按行渲染比例与错误提示、n_ctx 的顶层与 meta 嵌套取值及顶层优先顺序。Rust 测试必须串行执行。
+
+## 2026-10-14：供应商配置收敛为单一模板与字段级合并
+
+- 用户报告修改模型时 config.toml 被整份覆盖，Codex 已安装的 MCP 等段落丢失。核对确认根因是供应商档案允许两种数据形态：完整配置文档与 provider-only 模板。写入路径按形态二选一，完整形态直接替换整份文件，模板捕获时刻之后的 Codex 改动全部消失。
+- 本次不做数据库迁移，而是删除完整配置形态，由重构本身消除覆盖：供应商档案只存 provider-only 模板，即 model_provider、model、[model_providers.<id>] 与模型相关根字段白名单。保存、激活、CC Switch 导入、live 检测四条入口统一经过同一个裁剪函数；读到旧的完整形态时在内存收敛，落库记录保持原样。
+- 写入只剩一条语义：以当前 live 文件为底做字段级合并，永不整份替换。模型白名单根字段由模板定义最终集合，模板缺失即从 live 删除，model_catalog_json 例外仍由 prepare_model_catalog 持有；模板独有的 Codex 段只在 live 缺失时补入，用途是官方快照恢复共享集成表；其余 live 内容一律原样保留。save_active_provider 的 apply_common_config 参数与对应的整份写入函数随之删除。双文件写入顺序、备份、CAS 快照与回滚矩阵未改动。
+- 表单编辑器改为只读预览，展示 preview_provider_toml 渲染的「启用后将写入的完整 config.toml」，让用户在保存前直接看到 MCP 等段落仍在。预览复用激活文档构造，只读 live 与官方快照，不落盘、不加锁、不建备份。
+- 供应商 API 配置区收敛为单列六项顺序：供应商名称、API 请求地址、API Key、上游接口协议、获取模型列表、requires_openai_auth。模型不再有独立输入框，改由模型映射每行的单选框指定默认模型。默认模型仍是 providerForm.model 到 SavedProvider.model 的同一条链路，后端 normalize_mappings 本就保证默认模型进入菜单，因此不新增持久化字段、不做数据库迁移。编辑默认行的模型 ID 会带着勾选一起移动，删除默认行则把勾选交给剩余首个非空行；首个填写的模型行自动认领默认，保证不获取列表也能保存。
+- 上下文窗口与 Headers 控件的载体从完整草稿换成 provider-only 模板，并与 providerForm.tomlConfig 单一同步。取消 providerTomlDirty 冻结，避免「控件写入」与「表单重建」互相覆盖；保存时总是按当前表单重建模板。
+- 新增上游自动配置：填好地址、密钥与协议后按所选协议取回模型列表，列表连同上下文窗口写入模型映射。协议曾实现按 responses、chat、messages、gemini 顺序自动探测，但两个 OpenAI 方言共用 /v1/models，模型列表无法区分，命中 Responses 后还需额外验证 /v1/responses 路由。最终按产品决定取消探测，协议完全交给表单选择框，detect_provider_protocol 命令、ProviderProtocolDetection 载荷、路由判别与三项探测测试随之删除；获取失败只提示核对协议后重试，不阻断保存。
+- ProviderModel 新增 context_window，按 context_window、context_length、max_input_tokens、inputTokenLimit、max_context_tokens、max_tokens 的固定顺序取首个落在 1 至 10,000,000 区间的整数，Gemini 的 inputTokenLimit 单独映射进同一候选链。update_codex_context_window 新增 context_window 参数用于写入精确数值，不触碰 1M 预设持有的 compact token 限制。
+- 自动填充规则集中在 providerAutoSetup：用户已选模型若上游确实提供则保留，否则取列表首项；每次获取都把上游列表全量合并进菜单，已有行保持顺序、显示名称与已填写的窗口，只追加缺失模型并在 64 项上限处截断，上游不再提供的行不删除；上游数值只放宽缺失或更小的窗口，绝不缩小手动开启的 1M。
+- 行为变更：approval_policy、sandbox_mode、[features]、[desktop]、[projects] 等 Codex 自有段不再由供应商流程改写，模型相关根字段仍随模板写入。存量记录不迁移，读取与激活时收敛。
+- 合并时补入模板独有段落的规则有一个例外：根级 experimental_bearer_token 只被收割进 auth.json，即使 live 缺失也不写回 config.toml，否则明文密钥会重新出现在 Codex 直接读取的文件里。
+- 验证：766 项串行 Rust 测试、168 项 Node 测试、类型检查与 renderer 构建通过。新增测试覆盖模板永不触碰 Codex 自有段、切换后 live 的 MCP 与 desktop 值保持原样、模板注释不再改写 live 排版、根级 bearer token 不落盘、预览不落盘、上下文窗口候选顺序与范围校验、API 配置区六项顺序与单列布局、模型映射单选框的唯一默认标记与空行禁用、再次获取时全量合并保留手工行且不删除上游下架项。Rust 测试必须串行执行，并行会因共享 SQLite 测试库产生假失败。
+
 ## 2026-10-09：在线更新主通道故障后的自动恢复
 
 - 用户确认 Windows EXE 安装版 0.3.21 能发现新版，但只提供下载页。代码核对显示原生检查失败后仍从版本元数据服务发现新版，却把安装版更新方式静默改为 download。0.3.21 / 0.3.24 的更新模块无代码差异；公开清单平台、URL、公钥和安装包签名核验通过，Git 邮箱改写没有改变发行资产。用户机器的首通道失败原因未在现场复现，不能只凭提示判断网络、代理或便携标识。

@@ -93,7 +93,9 @@ fn managed_route_state_detection_and_drafts_use_original_provider_without_writes
         .expect("inherit direct route in editor draft");
     assert!(!draft.contains("127.0.0.1"));
     assert!(!draft.contains(&fixture.local_token));
-    assert!(draft.contains("local-fixture-command"));
+    // A draft owns only the provider selection. Codex-owned sections such as
+    // the fixture MCP server stay in the live file and never ride the draft.
+    assert!(!draft.contains("local-fixture-command"));
     let state =
         build_state_after_migration(fixture.dir.clone()).expect("read logical application state");
     let state_json = serde_json::to_value(&state).expect("serialize public state");

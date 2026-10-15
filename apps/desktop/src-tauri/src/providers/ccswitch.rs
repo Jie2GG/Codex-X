@@ -388,6 +388,10 @@ fn ccswitch_provider_template(
         table["wire_api"] = value("responses");
     }
     strip_provider_bearer_tokens(&mut doc);
+    // cc-switch stores a whole config.toml per profile. Only the provider
+    // selection may be imported, so its shared sections can never displace the
+    // live file's own MCP servers, desktop settings or projects.
+    super::live::retain_provider_only_roots(&mut doc, provider_id);
     Some(doc.to_string().trim_end().to_string())
 }
 
@@ -704,10 +708,10 @@ mod tests {
             );
             assert!(table.get("upstream_api").is_none());
             assert!(table.get("apiFormat").is_none());
-            assert_eq!(
-                doc["mcp_servers"]["keep"]["command"].as_str(),
-                Some("fixture-server")
-            );
+            // A cc-switch profile carries a whole config.toml. Only the
+            // provider selection is imported, so its shared sections can never
+            // displace the live file's own MCP servers.
+            assert!(doc.get("mcp_servers").is_none());
         }
     }
 
@@ -882,7 +886,7 @@ mod tests {
     }
 
     #[test]
-    fn provider_import_round_trips_complete_config_without_bearer_tokens() {
+    fn provider_import_round_trips_the_selection_without_bearer_tokens() {
         let settings_config = json!({
             "auth": {"OPENAI_API_KEY": "sk-from-auth"},
             "config": r#"# keep-imported-comment
@@ -958,7 +962,8 @@ command = "docs-server"
         assert_eq!(doc["model_provider"].as_str(), Some("custom"));
         assert_eq!(doc["model_reasoning_effort"].as_str(), Some("xhigh"));
         assert_eq!(doc["service_tier"].as_str(), Some("priority"));
-        assert_eq!(doc["notify"].as_array().map(|values| values.len()), Some(2));
+        // `notify` is Codex-owned and must not travel inside the template.
+        assert!(doc.get("notify").is_none());
         assert_eq!(
             doc["model_providers"]["custom"]["name"].as_str(),
             Some("Sky2api")
@@ -983,34 +988,26 @@ command = "docs-server"
             doc["model_providers"]["custom"]["env_http_headers"]["X-Project"].as_str(),
             Some("PROJECT_ID")
         );
-        assert_eq!(
-            doc["model_providers"]["other"]["base_url"].as_str(),
-            Some("https://other.example.com/v1")
-        );
-        assert_eq!(
-            doc["projects"]["/work/project"]["trust_level"].as_str(),
-            Some("trusted")
-        );
-        assert_eq!(doc["desktop"]["followUpQueueMode"].as_str(), Some("queue"));
-        assert_eq!(doc["desktop"]["localeOverride"].as_str(), Some("zh-CN"));
-        assert_eq!(doc["windows"]["sandbox"].as_str(), Some("elevated"));
-        assert_eq!(
-            doc["windows"]["shell_path"].as_str(),
-            Some(r"D:\Program Files\PowerShell\7\pwsh.exe")
-        );
-        assert_eq!(
-            doc["plugins"]["browser@openai-bundled"]["enabled"].as_bool(),
-            Some(true)
-        );
-        assert_eq!(doc["features"]["js_repl"].as_bool(), Some(false));
-        assert_eq!(
-            doc["shell_environment_policy"]["set"]["CODEX_HOME"].as_str(),
-            Some(r"C:\Users\Thy\.codex")
-        );
-        assert_eq!(
-            doc["mcp_servers"]["docs"]["command"].as_str(),
-            Some("docs-server")
-        );
+        // A cc-switch profile carries a whole config.toml. Importing it keeps
+        // only the selected provider: sibling provider tables and every
+        // Codex-owned section stay out of the template, so activating the
+        // imported record can never displace the live file's own integrations.
+        assert!(doc["model_providers"]
+            .as_table()
+            .expect("model providers")
+            .get("other")
+            .is_none());
+        for key in [
+            "projects",
+            "desktop",
+            "windows",
+            "plugins",
+            "features",
+            "shell_environment_policy",
+            "mcp_servers",
+        ] {
+            assert!(doc.get(key).is_none(), "import carried {key}");
+        }
         assert!(doc.get("experimental_bearer_token").is_none());
         assert!(doc["model_providers"]
             .as_table()

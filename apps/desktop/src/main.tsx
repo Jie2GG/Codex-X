@@ -1,5 +1,6 @@
 import { releaseInfoFromFallback, releaseInfoFromCheckFailure } from "./updateCheckFlow";
 import { providerUpstreamApi, providerRequiresConversion } from "./providerProtocol";
+import { buildDetectedMappings, detectedModels, pickDetectedModel, shouldWriteContextWindow } from "./providerAutoSetup";
 import React from "react";
 import { flushSync } from "react-dom";
 import ReactDOM from "react-dom/client";
@@ -41,6 +42,7 @@ import type {
   BuiltinPromptStatus,
   CodexDesktopRestartResult,
   CodexState,
+  ContextWindowConfig,
   ImportResult,
   InstructionMode,
   InstructionTemplate,
@@ -429,9 +431,9 @@ function getProviderPageCopy(lang: Lang): ProviderCopy {
       : "Enabling applies the API key using this provider's authentication settings. This previews the contents saved in auth.json.",
     tomlTitle: "config.toml (TOML)",
     tomlDescription: isChinese
-      ? "上方标准字段是启用时的权威值；已有模板中的其他扩展字段会保留。只有点击“重置生成”才会替换为标准模板。"
-      : "The standard fields above are authoritative when enabled. Other fields from an existing template are preserved; only Reset replaces it with the standard template.",
-    resetTomlLabel: isChinese ? "重置生成" : "Reset",
+      ? "只读预览：启用后将写入的完整 config.toml。供应商只改写自己的模型与接口设置，Codex 已有的 MCP、项目等段落原样保留。"
+      : "Read-only preview of the config.toml written when this provider is enabled. The provider rewrites only its own model and endpoint settings; MCP servers, projects and every other Codex-owned section stays untouched.",
+    copyTomlLabel: isChinese ? "复制" : "Copy",
     saveLabel: t.provider.saveAndSwitch,
     savingLabel: isChinese ? "保存中..." : "Saving...",
   };
@@ -803,8 +805,7 @@ function App() {
   const [error, setError] = React.useState<string>("");
   const [providerForm, setProviderForm] = React.useState<SavedProvider>(defaultProviderForm);
   const [providerTomlDraft, setProviderTomlDraft] = React.useState("");
-  const [providerTomlDirty, setProviderTomlDirty] = React.useState(false);
-  const [providerCommonConfigDirty, setProviderCommonConfigDirty] = React.useState(false);
+  const [providerTomlPreview, setProviderTomlPreview] = React.useState("");
   const [providerDraftRefreshToken, setProviderDraftRefreshToken] = React.useState(0);
   const [providerApiKeyVisible, setProviderApiKeyVisible] = React.useState(false);
   const [providerTestingId, setProviderTestingId] = React.useState("");
@@ -833,6 +834,7 @@ function App() {
   const providerTomlEditorRef = React.useRef<HTMLTextAreaElement | null>(null);
   const providerModelsRequestRef = React.useRef(0);
   const providerDraftRequestRef = React.useRef(0);
+  const providerPreviewRequestRef = React.useRef(0);
   const providerCreationRequestRef = React.useRef(0);
   const officialDraftRequestRef = React.useRef(0);
   const officialProfilesRequestRef = React.useRef(0);
@@ -869,7 +871,7 @@ function App() {
   routingUiRef.current = { ready: Boolean(state) && !refreshing, editing: providerMode !== "list" };
 
   const themeTransitionTimerRef = React.useRef<number | null>(null);
-  const providerTomlPreview = React.useMemo(() => buildProviderTomlPreview(providerForm), [providerForm]);
+  const providerTomlFallback = React.useMemo(() => buildProviderTomlPreview(providerForm), [providerForm]);
   const providerAuthPreview = React.useMemo(() => buildProviderAuthPreview(providerForm), [providerForm]);
   const activeBuiltinTemplateId = state?.instructionTemplateKey?.startsWith("builtin:")
     ? state.instructionTemplateKey.slice("builtin:".length)
@@ -1051,7 +1053,7 @@ function App() {
   React.useLayoutEffect(() => {
     if (providerMode !== "form") return;
     fitCodeEditorHeight(providerTomlEditorRef.current, 560);
-  }, [providerMode, providerTomlDraft]);
+  }, [providerMode, providerTomlPreview]);
 
   React.useEffect(() => {
     if (providerMode !== "form") {
@@ -1059,11 +1061,10 @@ function App() {
       return;
     }
     const requestId = ++providerDraftRequestRef.current;
-    if (providerTomlDirty) return;
 
     const fallback = providerForm.tomlConfig?.trim()
       || state?.configText?.trim()
-      || providerTomlPreview;
+      || providerTomlFallback;
     if (!providerForm.providerName.trim() || !providerForm.baseUrl.trim() || !providerForm.model.trim()) {
       setProviderTomlDraft(fallback);
       return;
@@ -1083,7 +1084,41 @@ function App() {
       .catch(() => {
         if (requestId === providerDraftRequestRef.current) setProviderTomlDraft(fallback);
       });
-  }, [configDir, creatingProvider, providerDraftRefreshToken, providerForm, providerMode, providerTomlDirty, providerTomlPreview, state?.configText]);
+  }, [configDir, creatingProvider, providerDraftRefreshToken, providerForm, providerMode, providerTomlFallback, state?.configText]);
+
+  // The form edits a provider-only template, while the editor shows the whole
+  // config.toml that activating it would write. Keeping those two apart is what
+  // lets a user see that the merge never drops the MCP servers, projects and
+  // desktop settings Codex owns.
+  React.useEffect(() => {
+    if (providerMode !== "form") {
+      providerPreviewRequestRef.current += 1;
+      setProviderTomlPreview("");
+      return;
+    }
+    const requestId = ++providerPreviewRequestRef.current;
+    if (!providerForm.providerName.trim() || !providerForm.baseUrl.trim() || !providerForm.model.trim()) {
+      setProviderTomlPreview("");
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void invoke<string>("preview_provider_toml", {
+        provider: {
+          ...providerForm,
+          tomlConfig: providerTomlDraft || providerForm.tomlConfig,
+          id: providerForm.id || customProviderId(providerForm.providerName || providerForm.baseUrl),
+        },
+        configDir: configDir || null,
+      })
+        .then((text) => {
+          if (requestId === providerPreviewRequestRef.current) setProviderTomlPreview(text);
+        })
+        .catch(() => {
+          if (requestId === providerPreviewRequestRef.current) setProviderTomlPreview("");
+        });
+    }, 200);
+    return () => window.clearTimeout(timer);
+  }, [configDir, providerForm, providerMode, providerTomlDraft, state?.configText]);
 
   React.useEffect(() => {
     if (tab === "provider" && providerMode === "form") return;
@@ -1458,8 +1493,6 @@ function App() {
           setEditingOfficialProfileId(null);
           setCreatingProvider(false);
           setEditingDetectedProvider(false);
-          setProviderTomlDirty(false);
-          setProviderCommonConfigDirty(false);
           setProviderTomlDraft("");
           setAvailableProviderModels([]);
           setProviderModelsLoading(false);
@@ -1952,6 +1985,25 @@ function App() {
     });
   };
 
+  const handleProviderTemplateChange = (value: string) => {
+    // The context-window control and the header editor both rewrite the same
+    // provider-only template, so the form and its mirror stay in lockstep and a
+    // later rebuild can never undo what the other one just wrote.
+    providerDraftRequestRef.current += 1;
+    setProviderTomlDraft(value);
+    setProviderForm((current) => ({ ...current, tomlConfig: value }));
+  };
+
+  const copyProviderTomlPreview = async () => {
+    if (!providerTomlPreview) return;
+    try {
+      await navigator.clipboard.writeText(providerTomlPreview);
+      setToast(lang === "zh" ? "已复制 config.toml 预览" : "Copied the config.toml preview");
+    } catch {
+      setError(lang === "zh" ? "复制失败，请手动选择文本" : "Copy failed; select the text manually");
+    }
+  };
+
   const saveProviderOnly = () => {
     const pendingProvider = normalizedProviderForm();
     const mappingValidation = validateProviderModelMappings(pendingProvider.modelMappings || [], pendingProvider.model, lang);
@@ -1965,28 +2017,30 @@ function App() {
     }
     if (!pendingProvider.providerName || !pendingProvider.baseUrl || !pendingProvider.model) {
       setError(lang === "zh"
-        ? "请填写供应商名称、API 请求地址和模型"
-        : "Provider name, API URL, and model are required");
+        ? "请填写供应商名称与 API 请求地址，并获取模型列表或在模型映射中勾选默认模型"
+        : "Provider name and API URL are required, and a model must come from fetching the list or from a default row in the model mappings");
       return;
     }
     return call(
       async () => {
         let provider = pendingProvider;
-        if (!providerTomlDirty) {
-          const draftSource = providerForm.tomlConfig?.trim() || "";
-          const providerForDraft = normalizedProviderForm(draftSource);
-          const latestDraft = await invoke<string>("build_provider_toml_draft", {
-            provider: providerForDraft,
-            newProvider: creatingProvider,
-            configDir: configDir || null,
-          });
-          provider = { ...providerForDraft, tomlConfig: latestDraft.trimEnd() };
-          setProviderTomlDraft(provider.tomlConfig || "");
-        }
+        // The provider-only template is the single editable shape, so a save
+        // always rebuilds it from the current form: the standard fields above
+        // stay authoritative, and whatever the template already carries inside
+        // the provider's own scope is preserved by the same rebuild.
+        const draftSource = providerForm.tomlConfig?.trim() || "";
+        const providerForDraft = normalizedProviderForm(draftSource);
+        const latestDraft = await invoke<string>("build_provider_toml_draft", {
+          provider: providerForDraft,
+          newProvider: creatingProvider,
+          configDir: configDir || null,
+        });
+        provider = { ...providerForDraft, tomlConfig: latestDraft.trimEnd() };
+        setProviderTomlDraft(provider.tomlConfig || "");
         const applyAfterSave = editingDetectedProvider
           || Boolean(editingProviderId && editingProviderId === effectiveActiveProviderId);
         const applied = applyAfterSave
-          ? await invoke<ActionResult>("save_active_provider", { provider, configDir: configDir || null, applyCommonConfig: providerCommonConfigDirty })
+          ? await invoke<ActionResult>("save_active_provider", { provider, configDir: configDir || null })
           : null;
         if (!applyAfterSave) await invoke<SavedProvider>("save_provider", { provider });
         const providerList = await invoke<SavedProvider[]>("list_saved_providers");
@@ -1998,8 +2052,6 @@ function App() {
         setProviderMode("list");
         setEditingProviderId(null);
         setEditingDetectedProvider(false);
-        setProviderTomlDirty(false);
-        setProviderCommonConfigDirty(false);
         setToast(applied && pendingProvider.modelMappings?.length
           ? (lang === "zh" ? "已保存，请重启 Codex 更新模型菜单" : "Saved. Restart Codex to update its model menu")
           : applied
@@ -2028,6 +2080,51 @@ function App() {
     setProviderModelsLoading(false);
   };
 
+  // A model list carries enough to wire up a custom provider without the user
+  // guessing a thing: the newest model becomes the default, every model the
+  // provider serves lands in the menu, and each model's own context window
+  // travels with it. All of it lands as ordinary editable form values, so the
+  // user reviews it and then saves. The protocol is deliberately absent here:
+  // the selector in the form owns that choice and a fetch never overwrites it.
+  const applyDetectedProviderSetup = async (models: ProviderModel[]) => {
+    const chosen = pickDetectedModel(models, providerForm.model);
+    if (!chosen) return null;
+    const mappings = buildDetectedMappings(detectedModels(models), providerForm.modelMappings ?? []);
+    setProviderForm((form) => ({
+      ...form,
+      wireApi: "responses",
+      model: chosen.id,
+      modelMappings: mappings,
+    }));
+
+    // The 1M preset is a deliberate choice, so an upstream number only ever
+    // widens a missing or smaller window and never shrinks what was set by hand.
+    if (chosen.contextWindow === null) return chosen;
+    const draft = (providerTomlDraft || providerForm.tomlConfig || "").trim();
+    if (!draft) return chosen;
+    try {
+      const parsed = await invoke<ContextWindowConfig>("update_codex_context_window", {
+        configText: draft,
+        enabled: null,
+        previousValues: null,
+        contextWindow: null,
+      });
+      if (!shouldWriteContextWindow(parsed.contextWindow, chosen.contextWindow)) {
+        return chosen;
+      }
+      const updated = await invoke<ContextWindowConfig>("update_codex_context_window", {
+        configText: draft,
+        enabled: null,
+        previousValues: null,
+        contextWindow: chosen.contextWindow,
+      });
+      handleProviderTemplateChange(updated.configText.trimEnd());
+    } catch {
+      // A context window is a convenience; the fetched list itself already stands.
+    }
+    return chosen;
+  };
+
   const fetchProviderModels = async () => {
     const baseUrl = providerForm.baseUrl.trim();
     const apiKey = (providerForm.apiKey || "").trim();
@@ -2043,16 +2140,25 @@ function App() {
     setError("");
     setToast(lang === "zh" ? "正在获取模型列表..." : "Fetching model list...");
     try {
-      const result = await invoke<ProviderModelsResult>("fetch_provider_models", { baseUrl, apiKey, upstreamApi: providerUpstreamApi(providerForm), configText: providerTomlDraft });
+      const upstreamApi = providerUpstreamApi(providerForm);
+      const result = await invoke<ProviderModelsResult>("fetch_provider_models", { baseUrl, apiKey, upstreamApi, configText: providerTomlDraft });
       if (providerModelsRequestRef.current !== requestId) return;
       setAvailableProviderModels(result.models);
-      setToast(result.models.length > 0
+      const chosen = await applyDetectedProviderSetup(result.models);
+      if (providerModelsRequestRef.current !== requestId) return;
+      setToast(chosen
+        ? (lang === "zh"
+          ? `已自动配置：模型 ${chosen.id}${chosen.contextWindow ? ` · 上下文 ${chosen.contextWindow.toLocaleString()}` : ""}。请在下方模型映射中核对后保存`
+          : `Auto-configured ${chosen.id}${chosen.contextWindow ? ` with a ${chosen.contextWindow.toLocaleString()} context window` : ""}. Review the model mappings below, then save`)
+        : result.models.length > 0
         ? (lang === "zh" ? `已获取 ${result.models.length} 个模型` : `${result.models.length} models fetched`)
         : (lang === "zh" ? "连接成功，但供应商没有返回模型" : "Connected, but the provider returned no models"));
     } catch (e) {
       if (providerModelsRequestRef.current !== requestId) return;
       setToast("");
-      setError(String(e));
+      setError(lang === "zh"
+        ? `${String(e)}。请确认「上游接口协议」与该供应商一致后重试`
+        : `${String(e)}. Check that the upstream API protocol matches this provider, then try again`);
     } finally {
       if (providerModelsRequestRef.current === requestId) setProviderModelsLoading(false);
     }
@@ -2694,8 +2800,6 @@ function App() {
         setEditingDetectedProvider(false);
         setProviderForm(next);
         setProviderTomlDraft(next.tomlConfig || buildProviderTomlPreview(next));
-        setProviderTomlDirty(false);
-        setProviderCommonConfigDirty(false);
         setProviderMode("form");
       },
     );
@@ -2727,8 +2831,6 @@ function App() {
     };
     setProviderForm(next);
     setProviderTomlDraft(next.tomlConfig || buildProviderTomlPreview(next));
-    setProviderTomlDirty(false);
-    setProviderCommonConfigDirty(false);
     setProviderApiKeyVisible(false);
     setAvailableProviderModels(variant?.models.map((entry) => ({ id: entry.model })) || []);
     setProviderMode("form");
@@ -2742,8 +2844,6 @@ function App() {
     setEditingDetectedProvider(false);
     setProviderForm(provider);
     setProviderTomlDraft(provider.tomlConfig?.trim() || buildProviderTomlPreview(provider));
-    setProviderTomlDirty(false);
-    setProviderCommonConfigDirty(false);
     setProviderMode("form");
   };
 
@@ -2792,8 +2892,6 @@ function App() {
     };
     setProviderForm(next);
     setProviderTomlDraft(next.tomlConfig || buildProviderTomlPreview(next));
-    setProviderTomlDirty(false);
-    setProviderCommonConfigDirty(false);
     setProviderMode("form");
   };
 
@@ -3164,6 +3262,7 @@ function App() {
                 providerModelMappings={providerForm.modelMappings || []}
                 onProviderModelMappingsChange={(modelMappings) => setProviderForm((current) => ({ ...current, modelMappings }))}
                 providerTomlDraft={providerTomlDraft}
+                providerTomlPreview={providerTomlPreview}
                 providerTomlRef={providerTomlEditorRef}
                 apiKeyVisible={providerApiKeyVisible}
                 availableModels={availableProviderModels.map((model) => model.id)}
@@ -3219,8 +3318,6 @@ function App() {
                   setProviderMode("list");
                   setCreatingProvider(false);
                   setEditingDetectedProvider(false);
-                  setProviderTomlDirty(false);
-                  setProviderCommonConfigDirty(false);
                 }}
                 onOfficialModelChange={(value) => setOfficialForm((current) => ({ ...current, model: value }))}
                 onOfficialNameChange={(value) => setOfficialForm((current) => ({ ...current, providerName: value }))}
@@ -3252,28 +3349,9 @@ function App() {
                 }}
                 onRequiresAuthChange={(value) => setProviderForm((current) => ({ ...current, requiresOpenaiAuth: value }))}
                 onToggleApiKeyVisibility={() => setProviderApiKeyVisible((value) => !value)}
-                onProviderTomlDraftChange={(value, origin = "manual") => {
-                  providerDraftRequestRef.current += 1;
-                  setProviderTomlDraft(value);
-                  setProviderTomlDirty(true);
-                  if (origin === "manual") setProviderCommonConfigDirty(true);
-                }}
-                onProviderHeadersConfigChange={(value) => {
-                  providerDraftRequestRef.current += 1;
-                  setProviderTomlDraft(value);
-                  setProviderForm((current) => ({ ...current, tomlConfig: value }));
-                }}
-                onResetProviderToml={() => {
-                  providerDraftRequestRef.current += 1;
-                  setProviderTomlDraft(
-                    providerForm.tomlConfig?.trim()
-                    || state?.configText?.trim()
-                    || providerTomlPreview,
-                  );
-                  setProviderTomlDirty(false);
-                  setProviderCommonConfigDirty(false);
-                  setProviderDraftRefreshToken((token) => token + 1);
-                }}
+                onProviderTomlDraftChange={handleProviderTemplateChange}
+                onProviderHeadersConfigChange={handleProviderTemplateChange}
+                onCopyProviderToml={() => void copyProviderTomlPreview()}
                 onSaveProvider={saveProviderConfig}
               />
             )}

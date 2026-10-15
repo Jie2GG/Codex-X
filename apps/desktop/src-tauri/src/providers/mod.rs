@@ -31,10 +31,9 @@ pub(crate) use connection::{
 pub(crate) use live::{
     activate_saved_provider_inner, build_provider_toml_draft_inner,
     build_provider_toml_draft_with_origin_inner, delete_saved_provider_inner,
-    get_provider_config_base_inner, save_active_provider_inner,
-    save_active_provider_with_common_config_inner, save_official_config_inner,
-    save_provider_toml_config_inner, switch_provider_inner, OfficialConfigInput, ProviderInput,
-    ProviderTomlInput,
+    get_provider_config_base_inner, preview_provider_toml_inner, save_active_provider_inner,
+    save_official_config_inner, save_provider_toml_config_inner, switch_provider_inner,
+    OfficialConfigInput, ProviderInput, ProviderTomlInput,
 };
 pub(crate) use live::{detected_live_custom_provider, replacement_write_order, LiveWriteOrder};
 #[cfg(test)]

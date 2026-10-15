@@ -384,7 +384,8 @@ trust_level = "trusted"
     assert!(normalized_toml.contains("# authoritative cc-switch template"));
     assert!(normalized_toml.contains("name = \"CC Name\""));
     assert!(normalized_toml.contains("service_tier = \"priority\""));
-    assert!(normalized_toml.contains("[projects.\"/work/project\"]"));
+    // [projects] is Codex-owned: an imported profile never carries it along.
+    assert!(!normalized_toml.contains("[projects."));
     assert!(normalized_toml.contains("wire_api = \"responses\""));
     assert!(!normalized_toml.contains("experimental_bearer_token"));
     assert_eq!(list_saved_providers_on_connection(&conn).unwrap().len(), 2);
@@ -1637,7 +1638,7 @@ fn switch_provider_round_trip_replaces_live_auth_and_restores_official_snapshot(
 }
 
 #[test]
-fn third_party_auth_shapes_round_trip_to_pure_key_and_complete_toml() {
+fn third_party_auth_shapes_round_trip_to_pure_key_and_merge_into_live() {
     let _db_guard = crate::app_db::test_db_guard();
     let cases = [
         ("key-only", json!({"OPENAI_API_KEY": "sk-provider"})),
@@ -1651,6 +1652,9 @@ fn third_party_auth_shapes_round_trip_to_pure_key_and_complete_toml() {
         let codex_dir = temp_codex_dir(&format!("third-party-auth-round-trip-{label}"));
         let official_config = r#"model_provider = "openai"
 model = "official-model"
+
+[mcp_servers."keep-me"]
+command = "keep-server"
 "#;
         let official_auth = json!({
             "auth_mode": "chatgpt",
@@ -1672,6 +1676,9 @@ model_reasoning_effort = "xhigh"
 service_tier = "priority"
 disable_response_storage = true
 notify = ["C:\\Tools\\notify.exe", "turn-ended"]
+
+[mcp_servers."template-only"]
+command = "template-server"
 
 [model_providers.custom]
 name = "Round Trip Proxy"
@@ -1728,7 +1735,18 @@ js_repl = false
         let final_doc = final_config
             .parse::<DocumentMut>()
             .expect("parse final provider config");
-        assert!(final_config.contains("# preserve-provider-template"));
+        // The live file is the base, so a template comment never restyles it.
+        assert!(
+            !final_config.contains("# preserve-provider-template"),
+            "provider templates must not rewrite the live config layout"
+        );
+        // Codex's own MCP server survives the switch, and the template's sibling
+        // table cannot replace the whole mcp_servers map.
+        assert_eq!(
+            final_doc["mcp_servers"]["keep-me"]["command"].as_str(),
+            Some("keep-server")
+        );
+        assert!(final_doc["mcp_servers"].get("template-only").is_none());
         assert_eq!(final_doc["model"].as_str(), Some("gpt-5.6-sol"));
         assert_eq!(final_doc["model_reasoning_effort"].as_str(), Some("xhigh"));
         assert_eq!(final_doc["service_tier"].as_str(), Some("priority"));
@@ -1752,6 +1770,87 @@ js_repl = false
         let _ = fs::remove_file(snapshot_path);
         let _ = fs::remove_dir_all(codex_dir);
     }
+}
+
+#[test]
+fn provider_preview_shows_codex_owned_sections_beside_the_selection() {
+    let _db_guard = crate::app_db::test_db_guard();
+    let codex_dir = temp_codex_dir("provider-toml-preview");
+    write_text(
+        &config_path(&codex_dir),
+        r#"model_provider = "openai"
+model = "official-model"
+
+[mcp_servers.context7]
+command = "npx"
+args = ["-y", "@upstash/context7-mcp"]
+
+[desktop]
+localeOverride = "zh-CN"
+"#,
+    )
+    .expect("write live config");
+    let provider = SavedProvider {
+        id: format!(
+            "preview-{}",
+            Local::now().timestamp_nanos_opt().unwrap_or_default()
+        ),
+        provider_name: "Preview Proxy".to_string(),
+        base_url: "https://preview.example.com/v1".to_string(),
+        model: "gpt-5.6-sol".to_string(),
+        api_key: Some("sk-preview".to_string()),
+        toml_config: Some(
+            r#"model_provider = "custom"
+model = "gpt-5.6-sol"
+model_context_window = 200000
+
+[model_providers.custom]
+name = "Preview Proxy"
+base_url = "https://preview.example.com/v1"
+wire_api = "responses"
+requires_openai_auth = true
+"#
+            .to_string(),
+        ),
+        wire_api: "responses".to_string(),
+        upstream_api: None,
+        requires_openai_auth: true,
+        model_mappings: Vec::new(),
+    };
+
+    let before = fs::read_to_string(config_path(&codex_dir)).expect("read live before preview");
+    let preview = providers::preview_provider_toml_inner(
+        provider.clone(),
+        Some(codex_dir.display().to_string()),
+    )
+    .expect("preview the provider toml");
+    let after = fs::read_to_string(config_path(&codex_dir)).expect("read live after preview");
+    assert_eq!(before, after, "a preview must never write the live file");
+
+    let doc = preview.parse::<DocumentMut>().expect("parse preview");
+    assert_eq!(doc["model"].as_str(), Some("gpt-5.6-sol"));
+    assert_eq!(doc["model_context_window"].as_integer(), Some(200_000));
+    assert_eq!(
+        doc["model_providers"]["custom"]["base_url"].as_str(),
+        Some("https://preview.example.com/v1")
+    );
+    assert_eq!(
+        doc["mcp_servers"]["context7"]["command"].as_str(),
+        Some("npx")
+    );
+    assert_eq!(
+        doc["mcp_servers"]["context7"]["args"]
+            .as_array()
+            .map(|args| args.len()),
+        Some(2)
+    );
+    assert_eq!(doc["desktop"]["localeOverride"].as_str(), Some("zh-CN"));
+    assert!(
+        !preview.contains("sk-preview"),
+        "the API key belongs to auth.json, never to the config preview"
+    );
+
+    let _ = fs::remove_dir_all(codex_dir);
 }
 
 #[test]
@@ -1856,6 +1955,17 @@ enabled = true
         official_auth
     );
 
+    // Codex added an MCP server and a desktop setting while provider B sat in the
+    // library, so activating it must merge into the live file instead of replacing it.
+    let live_before_b = fs::read_to_string(config_path(&codex_dir)).expect("read live config");
+    write_text(
+        &config_path(&codex_dir),
+        &format!(
+            "{live_before_b}\n[mcp_servers.demo]\ncommand = \"demo-server\"\n\n[desktop]\nlocaleOverride = \"en-US\"\n"
+        ),
+    )
+    .expect("append Codex-owned sections");
+
     let provider_b = list_saved_providers_inner()
         .expect("list saved providers")
         .into_iter()
@@ -1882,9 +1992,14 @@ enabled = true
     let final_doc = final_config
         .parse::<DocumentMut>()
         .expect("parse provider B config");
-    assert!(final_config.contains("# keep-provider-b-template"));
+    // The live file is the base, so a template comment never restyles it.
+    assert!(
+        !final_config.contains("# keep-provider-b-template"),
+        "provider templates must not rewrite the live config layout"
+    );
     assert_eq!(final_doc["model"].as_str(), Some("gpt-5.6-sol"));
     assert_eq!(final_doc["model_reasoning_effort"].as_str(), Some("xhigh"));
+    assert_eq!(final_doc["service_tier"].as_str(), Some("priority"));
     assert_eq!(
         final_doc["model_providers"]["custom"]["base_url"].as_str(),
         Some("https://b.example.com/v1")
@@ -1892,9 +2007,14 @@ enabled = true
     assert!(final_doc["model_providers"]["custom"]
         .get("experimental_bearer_token")
         .is_none());
+    // Codex-owned content added after the template was captured survives untouched.
     assert_eq!(
-        final_doc["plugins"]["browser@openai-bundled"]["enabled"].as_bool(),
-        Some(true)
+        final_doc["mcp_servers"]["demo"]["command"].as_str(),
+        Some("demo-server")
+    );
+    assert_eq!(
+        final_doc["desktop"]["localeOverride"].as_str(),
+        Some("en-US")
     );
 
     providers::delete_provider_inner(&provider_a_id).expect("delete provider A");
@@ -2075,11 +2195,10 @@ command = "docs-server"
         .parse::<DocumentMut>()
         .expect("parse provider A TOML");
     assert!(!provider_a_toml.contains("experimental_bearer_token"));
-    assert_eq!(provider_a_doc["approval_policy"].as_str(), Some("never"));
-    assert_eq!(
-        provider_a_doc["mcp_servers"]["docs"]["command"].as_str(),
-        Some("docs-server")
-    );
+    // A detected record captures only the provider selection; the live file
+    // keeps its own approval policy and MCP servers untouched.
+    assert!(provider_a_doc.get("approval_policy").is_none());
+    assert!(provider_a_doc.get("mcp_servers").is_none());
     assert_eq!(result.state.model.as_deref(), Some("model-b"));
     assert!(result
         .state
@@ -2756,10 +2875,12 @@ requires_openai_auth = true
         .find(|provider| provider.id == provider_id)
         .expect("backfilled provider");
     assert_eq!(saved.api_key.as_deref(), Some("sk-auth-only"));
+    // The backfilled record owns only its selection; approval_policy stays with
+    // the live file instead of being captured into the template.
     assert!(saved
         .toml_config
         .as_deref()
-        .is_some_and(|text| text.contains("approval_policy = \"never\"")));
+        .is_some_and(|text| !text.contains("approval_policy")));
 
     save_provider_toml_config_inner(ProviderTomlInput {
         config_dir: Some(codex_dir.display().to_string()),
@@ -3879,7 +4000,7 @@ requires_openai_auth = true
 }
 
 #[test]
-fn provider_toml_activation_uses_complete_provider_template() {
+fn provider_toml_activation_merges_into_the_live_file() {
     let codex_dir = temp_codex_dir("provider-toml-merge");
     let current = r#"# keep-user-comment
 model_provider = "custom"
@@ -3925,16 +4046,25 @@ command = "must-not-replace-live"
     let doc = merged
         .parse::<DocumentMut>()
         .expect("merged config stays valid");
-    assert!(!merged.contains("# keep-user-comment"));
+    // The live file is the base: its comment, MCP server and projects table all
+    // survive, and the template's stale MCP entry never replaces them.
+    assert!(merged.contains("# keep-user-comment"));
     assert_eq!(doc["model"].as_str(), Some("new-model"));
-    assert_eq!(doc["approval_policy"].as_str(), Some("on-request"));
-    assert!(doc.get("model_instructions_file").is_none());
+    // approval_policy is Codex-owned, so the live value wins.
+    assert_eq!(doc["approval_policy"].as_str(), Some("never"));
     assert_eq!(
-        doc["mcp_servers"]["stale"]["command"].as_str(),
-        Some("must-not-replace-live")
+        doc["model_instructions_file"].as_str(),
+        Some("/tmp/user-prompt.md")
     );
-    assert!(doc["mcp_servers"].get("docs").is_none());
-    assert!(doc.get("projects").is_none());
+    assert_eq!(
+        doc["mcp_servers"]["docs"]["command"].as_str(),
+        Some("docs-server")
+    );
+    assert!(doc["mcp_servers"].get("stale").is_none());
+    assert_eq!(
+        doc["projects"]["/tmp/work"]["trust_level"].as_str(),
+        Some("trusted")
+    );
     assert_eq!(
         doc["model_providers"]["custom"]["base_url"].as_str(),
         Some("https://new.example.com/v1")

@@ -488,6 +488,8 @@ mod tests {
                 model: "local-model".into(),
                 display_name: "Local".into(),
                 context_window: None,
+
+                compact_percent: None,
             }],
             "local-model",
             &mut doc,

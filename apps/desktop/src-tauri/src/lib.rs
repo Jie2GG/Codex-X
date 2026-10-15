@@ -1084,8 +1084,14 @@ async fn update_codex_context_window(
     config_text: String,
     enabled: Option<bool>,
     previous_values: Option<context_config::ContextWindowValues>,
+    context_window: Option<i64>,
 ) -> Result<context_config::ContextWindowConfig> {
-    context_config::update_codex_context_window_inner(config_text, enabled, previous_values)
+    context_config::update_codex_context_window_with_override(
+        config_text,
+        enabled,
+        previous_values,
+        context_window,
+    )
 }
 
 #[tauri::command]
@@ -1156,7 +1162,6 @@ async fn activate_saved_provider(
 async fn save_active_provider(
     provider: SavedProvider,
     config_dir: Option<String>,
-    apply_common_config: Option<bool>,
 ) -> Result<ActionResult> {
     tauri::async_runtime::spawn_blocking(move || {
         let provider =
@@ -1164,11 +1169,7 @@ async fn save_active_provider(
         failover::ensure_conversion_route(config_dir.clone(), &provider)?;
         let result = failover::with_provider_change(config_dir.clone(), || {
             let provider_id = provider.id.clone();
-            let result = if apply_common_config.unwrap_or(false) {
-                providers::save_active_provider_with_common_config_inner(provider, config_dir)?
-            } else {
-                save_active_provider_inner(provider, config_dir)?
-            };
+            let result = save_active_provider_inner(provider, config_dir)?;
             Ok(finish_provider_selection(
                 result,
                 ActiveProviderSelectionUpdate::Set(provider_id),
@@ -1640,6 +1641,18 @@ async fn fetch_provider_models(
 }
 
 #[tauri::command]
+async fn preview_provider_toml(
+    provider: SavedProvider,
+    config_dir: Option<String>,
+) -> Result<String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        providers::preview_provider_toml_inner(provider, config_dir)
+    })
+    .await
+    .map_err(|e| CodexxError::Config(format!("预览 config.toml 失败: {e}")))?
+}
+
+#[tauri::command]
 async fn switch_provider(input: ProviderInput) -> Result<ActionResult> {
     tauri::async_runtime::spawn_blocking(move || {
         failover::with_provider_change(input.config_dir.clone(), || {
@@ -1931,6 +1944,7 @@ pub fn run() {
             save_provider_toml_config,
             test_provider_connection,
             fetch_provider_models,
+            preview_provider_toml,
             list_backups,
             restore_backup,
             open_url,

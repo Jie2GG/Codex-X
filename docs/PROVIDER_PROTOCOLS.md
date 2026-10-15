@@ -14,6 +14,10 @@
 Base URL 可以包含服务的路径前缀。Gemini 地址已有 `/v1` 或 `/v1beta` 时使用该版本，不重复添加。
 模型名称必须是该供应商支持的名称；获取模型列表和连接检测也使用所选协议及 Headers。
 
+填写供应商名称、API 地址和密钥，并选好上游接口协议后，点击「获取模型列表」按所选协议取回模型列表。协议完全由这个选择框决定，Codex-X 不再自动探测，也不会替你更换已经选好的协议；取不到列表时请核对协议是否与供应商一致后重试。
+
+取回的全部模型会合并进「模型映射」，每个模型自带的上下文窗口一并写入。已经手动排好的行保持原有顺序、显示名称和已填写的窗口，上游不再提供的模型不会被自动删除。映射中勾选的那一行就是默认模型：它写入 config.toml 的 `model`，也是 Codex 打开这个供应商时的默认选择。没有获取列表时，添加一行填写模型 ID 再勾选同样可以保存。
+
 Chat、Claude、Gemini 供应商可以先保存，再到「设置 → 路由与故障转移」开启路由总开关和 Codex 请求接管，随后启用供应商。
 Codex 始终使用 Responses，本地路由负责转换请求及普通 / 流式响应。自动切换是独立选项，不是使用协议转换的前提。
 
@@ -23,6 +27,16 @@ Codex 始终使用 Responses，本地路由负责转换请求及普通 / 流式�
 
 上游协议保存在 Codex-X 的供应商记录中；生成的 Codex TOML 使用 `wire_api = "responses"`。
 旧的 Chat 配置会识别为 Chat Completions 转换，复制供应商和再次导入保留协议选择。
+
+## 上下文窗口与自动压缩
+
+获取模型列表时，上下文窗口按固定顺序读取上游返回的 `context_window`、`context_length`、`n_ctx`、`max_input_tokens`、`inputTokenLimit`、`max_context_tokens`、`max_tokens`；llama.cpp 风格网关把 `n_ctx` 放在 `meta` 对象里，同样会被读取，取不到时留空由你填写。
+
+模型映射为每个模型分别保存上下文窗口和自动压缩比例。比例填 1 至 99，Codex-X 按该模型自己的窗口换算成绝对阈值，写入模型目录的 `auto_compact_token_limit`；留空则由 Codex 自行决定。切换模型时每个模型保留自己的窗口与阈值，不会互相覆盖。
+
+存在模型映射时，供应商不再写入根级 `model_context_window` 与 `model_auto_compact_token_limit`：它们是全局单值，会盖掉每个模型自己的设置。「开启 1M 上下文窗口」也随之禁用，请直接在对应该模型的行里填写窗口数值。没有模型映射时，根级写法与之前一致。
+
+`model_auto_compact_token_limit_scope` 由 Codex 自己维护，Codex-X 既不写入也不覆盖，你在 config.toml 里的设置原样保留。
 
 ## 转换范围
 

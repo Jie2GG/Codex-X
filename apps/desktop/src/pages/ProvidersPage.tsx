@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -30,7 +30,7 @@ import { providerUpstreamApi } from "../providerProtocol";
 import { ProviderPresetPicker } from "../components/ProviderPresetPicker";
 import { PROVIDER_PRESETS, getProviderPreset, getProviderPresetVariant } from "../providerPresets";
 import { Button, Checkbox, ModalShell } from "../components/ui";
-import type { ProviderMode, ProviderModelMapping } from "../types";
+import type { ContextWindowConfig, ContextWindowValues, ProviderMode, ProviderModelMapping } from "../types";
 import { moveProviderRow, providerRowKey } from "../providerRowOrder";
 import "../styles/providers-page.css";
 
@@ -136,7 +136,7 @@ export type ProviderCopy = {
   authPreviewDescription: string;
   tomlTitle: string;
   tomlDescription: string;
-  resetTomlLabel: string;
+  copyTomlLabel: string;
   saveLabel: string;
   savingLabel: string;
 };
@@ -173,6 +173,7 @@ export type ProvidersPageProps = {
   officialInfo: ProviderOfficialInfo;
   providerAuthPreview: ReactNode;
   providerTomlDraft: string;
+  providerTomlPreview: string;
   providerTomlRef?: Ref<HTMLTextAreaElement>;
   apiKeyVisible: boolean;
   availableModels: readonly string[];
@@ -203,9 +204,9 @@ export type ProvidersPageProps = {
   onUpstreamApiChange: (value: string) => void;
   onRequiresAuthChange: (value: boolean) => void;
   onToggleApiKeyVisibility: () => void;
-  onProviderTomlDraftChange: (value: string, origin?: "manual" | "context") => void;
+  onProviderTomlDraftChange: (value: string) => void;
   onProviderHeadersConfigChange: (value: string) => void;
-  onResetProviderToml: () => void;
+  onCopyProviderToml: () => void;
   onSaveProvider: () => void;
 };
 
@@ -223,16 +224,6 @@ function Field({ label, children, className }: FieldProps) {
     </label>
   );
 }
-
-type ContextWindowValues = {
-  contextWindow: number | null;
-  compactTokenLimit: number | null;
-};
-
-type ContextWindowConfig = ContextWindowValues & {
-  configText: string;
-  enabled: boolean;
-};
 
 function ContextWindowControl({
   lang,
@@ -264,6 +255,7 @@ function ContextWindowControl({
         configText,
         enabled: null,
         previousValues: null,
+        contextWindow: null,
       }).then((result) => {
         if (mounted && requestId.current === id && currentText.current === configText) {
           setSettings(result);
@@ -294,6 +286,7 @@ function ContextWindowControl({
         configText: originalText,
         enabled,
         previousValues: enabled ? null : previousValues.current,
+        contextWindow: null,
       });
       if (requestId.current !== id || currentText.current !== originalText) return;
       previousValues.current = enabled
@@ -854,6 +847,7 @@ function ProviderForm({
   editingProviderId,
   providerAuthPreview,
   providerTomlDraft,
+  providerTomlPreview,
   providerTomlRef,
   apiKeyVisible,
   availableModels,
@@ -869,10 +863,9 @@ function ProviderForm({
   onToggleApiKeyVisibility,
   onProviderTomlDraftChange,
   onProviderHeadersConfigChange,
-  onResetProviderToml,
+  onCopyProviderToml,
   onSaveProvider,
-}: Pick<ProvidersPageProps, "lang" | "copy" | "creatingProvider" | "selectedPresetId" | "selectedPresetVariantId" | "onPresetSelect" | "onPresetVariantSelect" | "providerForm" | "providerModelMappings" | "onProviderModelMappingsChange" | "loading" | "editingProviderId" | "providerAuthPreview" | "providerTomlDraft" | "providerTomlRef" | "apiKeyVisible" | "availableModels" | "fetchingModels" | "onCancelMode" | "onApiKeyChange" | "onBaseUrlChange" | "onProviderNameChange" | "onProviderModelChange" | "onFetchModels" | "onUpstreamApiChange" | "onRequiresAuthChange" | "onToggleApiKeyVisibility" | "onProviderTomlDraftChange" | "onProviderHeadersConfigChange" | "onResetProviderToml" | "onSaveProvider">) {
-  const modelListId = useId();
+}: Pick<ProvidersPageProps, "lang" | "copy" | "creatingProvider" | "selectedPresetId" | "selectedPresetVariantId" | "onPresetSelect" | "onPresetVariantSelect" | "providerForm" | "providerModelMappings" | "onProviderModelMappingsChange" | "loading" | "editingProviderId" | "providerAuthPreview" | "providerTomlDraft" | "providerTomlPreview" | "providerTomlRef" | "apiKeyVisible" | "availableModels" | "fetchingModels" | "onCancelMode" | "onApiKeyChange" | "onBaseUrlChange" | "onProviderNameChange" | "onProviderModelChange" | "onFetchModels" | "onUpstreamApiChange" | "onRequiresAuthChange" | "onToggleApiKeyVisibility" | "onProviderTomlDraftChange" | "onProviderHeadersConfigChange" | "onCopyProviderToml" | "onSaveProvider">) {
   const [contextWindowBusy, setContextWindowBusy] = useState(false);
   const [headersBusy, setHeadersBusy] = useState(false);
   const [headersValid, setHeadersValid] = useState(true);
@@ -897,8 +890,10 @@ function ProviderForm({
         <div className="cx-providers-section-heading">
           <div><h3>{copy.apiConfigTitle}</h3><p>{copy.apiConfigDescription}</p></div>
         </div>
-        <div className="cx-providers-form-grid cx-providers-form-grid--provider">
-          <Field label={copy.apiKeyLabel} className="cx-providers-field--full">
+        <div className="cx-providers-form-grid cx-providers-form-grid--single">
+          <Field label={copy.nameLabel}><input value={providerForm.providerName} onChange={(event) => onProviderNameChange(event.target.value)} disabled={formBusy} /></Field>
+          <Field label={copy.baseUrlLabel}><input value={providerForm.baseUrl} onChange={(event) => onBaseUrlChange(event.target.value)} disabled={formBusy} /></Field>
+          <Field label={copy.apiKeyLabel}>
             <div className="cx-providers-secret-input">
               <input
                 type={apiKeyVisible ? "text" : "password"}
@@ -912,51 +907,6 @@ function ProviderForm({
               </button>
             </div>
           </Field>
-          <Field label={copy.baseUrlLabel} className="cx-providers-field--full"><input value={providerForm.baseUrl} onChange={(event) => onBaseUrlChange(event.target.value)} disabled={formBusy} /></Field>
-          <Field label={copy.nameLabel}><input value={providerForm.providerName} onChange={(event) => onProviderNameChange(event.target.value)} disabled={formBusy} /></Field>
-          <Field label={copy.modelLabel}>
-            <div className="cx-providers-model-input-row">
-              <input
-                value={providerForm.model}
-                list={availableModels.length ? modelListId : undefined}
-                aria-label={copy.modelLabel}
-                onChange={(event) => onProviderModelChange(event.target.value)}
-                disabled={formBusy}
-              />
-              <button
-                type="button"
-                className="cx-providers-button cx-providers-button--secondary cx-providers-button--small cx-providers-fetch-models"
-                onClick={onFetchModels}
-                disabled={formBusy || !canFetchModels || !headersValid}
-                title={copy.fetchModelsLabel}
-                aria-label={copy.fetchModelsLabel}
-              >
-                {fetchingModels
-                  ? <Loader2 size={14} className="cx-providers-spin" aria-hidden="true" />
-                  : <RefreshCw size={14} aria-hidden="true" />}
-                {fetchingModels ? copy.fetchingModelsLabel : copy.fetchModelsLabel}
-              </button>
-            </div>
-            {availableModels.length > 0 && (
-              <>
-                <datalist id={modelListId}>
-                  {availableModels.map((model) => <option value={model} key={model} />)}
-                </datalist>
-                <select
-                  className="cx-providers-model-select"
-                  value=""
-                  aria-label={copy.chooseModelLabel(availableModels.length)}
-                  disabled={formBusy}
-                  onChange={(event) => {
-                    if (event.target.value) onProviderModelChange(event.target.value);
-                  }}
-                >
-                  <option value="">{copy.chooseModelLabel(availableModels.length)}</option>
-                  {availableModels.map((model) => <option value={model} key={model}>{model}</option>)}
-                </select>
-              </>
-            )}
-          </Field>
           <Field label={lang === "zh" ? "上游接口协议" : "Upstream API protocol"}>
             <select value={providerUpstreamApi(providerForm)} onChange={(event) => onUpstreamApiChange(event.target.value)} disabled={formBusy}>
               <option value="responses">OpenAI Responses</option>
@@ -967,14 +917,38 @@ function ProviderForm({
             </select>
           </Field>
           {providerUpstreamApi(providerForm) !== "responses" && (
-            <p className="cx-providers-field--full cx-providers-protocol-hint">
+            <p className="cx-providers-protocol-hint">
               {lang === "zh"
                 ? "Codex 仍使用 Responses。本协议需在设置中开启本地路由和配置接管；使用期间请保持 Codex-X 运行。关闭路由前请切回 Responses 供应商或官方账号；退出期间请求会暂停，重开后自动恢复。"
                 : "Codex still uses Responses. Enable the local router and config takeover in Settings, and keep Codex-X running. Switch to a Responses provider or official account before disabling the router. Requests pause while Codex-X is closed and resume after reopening."}
             </p>
           )}
+          <div className="cx-providers-model-fetch-row">
+            <button
+              type="button"
+              className="cx-providers-button cx-providers-button--secondary"
+              onClick={onFetchModels}
+              disabled={formBusy || !canFetchModels || !headersValid}
+              title={copy.fetchModelsLabel}
+              aria-label={copy.fetchModelsLabel}
+            >
+              {fetchingModels
+                ? <Loader2 size={14} className="cx-providers-spin" aria-hidden="true" />
+                : <RefreshCw size={14} aria-hidden="true" />}
+              {fetchingModels ? copy.fetchingModelsLabel : copy.fetchModelsLabel}
+            </button>
+            <p className="cx-providers-model-fetch-hint">
+              {availableModels.length > 0
+                ? (lang === "zh"
+                  ? `已获取 ${availableModels.length} 个模型，已合并进下方模型映射。勾选一行即可设为默认模型。`
+                  : `${availableModels.length} models fetched and merged into the mappings below. Check a row to make it the default model.`)
+                : (lang === "zh"
+                  ? "获取到的全部模型会写入下方模型映射，并勾选一行作为默认模型。"
+                  : "Every model the provider lists lands in the mappings below, with one checked as the default model.")}
+            </p>
+          </div>
           <Checkbox
-            className="cx-providers-checkbox cx-providers-checkbox--full"
+            className="cx-providers-checkbox"
             checked={providerForm.requiresOpenaiAuth}
             onCheckedChange={onRequiresAuthChange}
             label={copy.requiresAuthLabel}
@@ -1001,6 +975,7 @@ function ProviderForm({
         availableModels={availableModels}
         disabled={formBusy}
         onChange={onProviderModelMappingsChange}
+        onCurrentModelChange={onProviderModelChange}
       />
 
       <section className="cx-providers-form-section">
@@ -1012,11 +987,12 @@ function ProviderForm({
         <div className="cx-providers-section-heading cx-providers-section-heading--with-action">
           <div><h3>{copy.tomlTitle}</h3><p>{copy.tomlDescription}</p></div>
           <div className="cx-providers-context-actions">
-            <ContextWindowControl lang={lang} configText={providerTomlDraft} onConfigChange={(value) => onProviderTomlDraftChange(value, "context")} disabled={formBusy} onBusyChange={setContextWindowBusy} />
-            <button type="button" className="cx-providers-button cx-providers-button--secondary cx-providers-button--small" onClick={() => { setHeadersRevision((value) => value + 1); onResetProviderToml(); }} disabled={formBusy}><RefreshCw size={14} aria-hidden="true" />{copy.resetTomlLabel}</button>
+            {providerModelMappings.length > 0 && <span className="cx-providers-context-mappings-note">{lang === "zh" ? "窗口与压缩比例已按模型分别设置" : "Windows and compaction shares are set per model"}</span>}
+            <ContextWindowControl lang={lang} configText={providerTomlDraft} onConfigChange={(value) => { setHeadersRevision((revision) => revision + 1); onProviderTomlDraftChange(value); }} disabled={formBusy || providerModelMappings.length > 0} onBusyChange={setContextWindowBusy} />
+            <button type="button" className="cx-providers-button cx-providers-button--secondary cx-providers-button--small" aria-label={copy.copyTomlLabel} onClick={onCopyProviderToml} disabled={formBusy || !providerTomlPreview}><Copy size={14} aria-hidden="true" />{copy.copyTomlLabel}</button>
           </div>
         </div>
-        <textarea ref={providerTomlRef} className="cx-providers-code-editor cx-providers-toml-editor" aria-label={copy.tomlTitle} value={providerTomlDraft} onChange={(event) => { setHeadersRevision((value) => value + 1); onProviderTomlDraftChange(event.target.value); }} disabled={formBusy} spellCheck={false} />
+        <textarea ref={providerTomlRef} className="cx-providers-code-editor cx-providers-toml-editor" aria-label={copy.tomlTitle} value={providerTomlPreview} readOnly spellCheck={false} />
       </section>
 
       <div className="cx-providers-form-actions cx-providers-form-actions--save">

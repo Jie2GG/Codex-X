@@ -347,6 +347,7 @@ pub(crate) fn provider_template_from_document(
     doc: &DocumentMut,
     provider_id: &str,
     model: &str,
+    model_mappings: &[super::model_catalog::ProviderModelMapping],
 ) -> Result<String> {
     let provider_table = doc
         .get("model_providers")
@@ -362,6 +363,21 @@ pub(crate) fn provider_template_from_document(
     template["model_provider"] = value(provider_id);
     template["model"] = value(model);
     strip_provider_bearer_tokens(&mut template);
+    // A saved record owns only its own selection. Codex-owned sections present
+    // in the source document (MCP servers, desktop settings, projects, ...)
+    // must not ride along, or activating this record later would overwrite them.
+    super::live::retain_provider_only_roots(&mut template, provider_id);
+    if !model_mappings.is_empty() {
+        // The menu already carries a context window and a compaction limit for
+        // every model, so the two root-level scalars would flatten all of them
+        // onto one shared threshold and make switching models lose each model's
+        // own numbers. Without a menu there is nothing per model to keep, so the
+        // root values stay exactly as they were.
+        template.as_table_mut().remove("model_context_window");
+        template
+            .as_table_mut()
+            .remove("model_auto_compact_token_limit");
+    }
     Ok(template.to_string().trim_end().to_string())
 }
 
@@ -1103,6 +1119,7 @@ fn sync_provider_toml_from_fields(provider: &mut SavedProvider) -> Result<()> {
         &doc,
         &provider_id,
         &provider.model,
+        &provider.model_mappings,
     )?);
     Ok(())
 }
@@ -1644,12 +1661,44 @@ command = "fixture-server"
     }
 
     #[test]
+    fn a_model_menu_makes_the_root_level_window_and_compaction_limit_redundant() {
+        let doc: DocumentMut = "model_context_window = 524288\nmodel_auto_compact_token_limit = 393216\nmodel_auto_compact_token_limit_scope = \"total\"\n\n[model_providers.custom]\nname = \"Fixture\"\nbase_url = \"https://fixture.invalid/v1\"\nwire_api = \"responses\"\nrequires_openai_auth = false\n"
+            .parse()
+            .unwrap();
+        let mappings = vec![super::super::model_catalog::ProviderModelMapping {
+            model: "fixture-model".into(),
+            display_name: "Fixture".into(),
+            context_window: Some(524_288),
+            compact_percent: Some(75),
+        }];
+        let with_menu =
+            provider_template_from_document(&doc, "custom", "fixture-model", &mappings).unwrap();
+        assert!(
+            !with_menu.contains("model_context_window"),
+            "the menu carries a window per model, so the root scalar must not flatten them"
+        );
+        assert!(
+            !with_menu.contains("model_auto_compact_token_limit ="),
+            "the menu carries a compaction threshold per model"
+        );
+        assert!(
+            !with_menu.contains("model_auto_compact_token_limit_scope"),
+            "a key Codex owns is never part of a provider template"
+        );
+
+        let without_menu =
+            provider_template_from_document(&doc, "custom", "fixture-model", &[]).unwrap();
+        assert!(without_menu.contains("model_context_window = 524288"));
+        assert!(without_menu.contains("model_auto_compact_token_limit = 393216"));
+    }
+
+    #[test]
     fn invalid_legacy_headers_can_be_read_and_repaired_but_cannot_be_saved() {
         let text = HEADER_CONFIG.replace("\"Codex-X\"", "\"secret\\r\\ninjection\"");
         let rows = read_provider_headers_inner(text.clone()).unwrap();
         assert_eq!(rows[0].value, "secret\r\ninjection");
         let doc = text.parse::<DocumentMut>().unwrap();
-        assert!(provider_template_from_document(&doc, "custom", "gpt-test").is_err());
+        assert!(provider_template_from_document(&doc, "custom", "gpt-test", &[]).is_err());
         let repaired = update_provider_headers_inner(
             text,
             vec![header("X-Title", "safe", ProviderHeaderSource::Static)],
@@ -1658,7 +1707,8 @@ command = "fixture-server"
         assert!(provider_template_from_document(
             &repaired.parse::<DocumentMut>().unwrap(),
             "custom",
-            "gpt-test"
+            "gpt-test",
+            &[]
         )
         .is_ok());
     }
@@ -2051,11 +2101,15 @@ command = "fixture-server"
                 model: " gpt-5.5 ".into(),
                 display_name: "GPT".into(),
                 context_window: None,
+
+                compact_percent: None,
             },
             super::super::model_catalog::ProviderModelMapping {
                 model: "deepseek-chat".into(),
                 display_name: "DeepSeek".into(),
                 context_window: Some(128000),
+
+                compact_percent: None,
             },
         ];
         let original = save_manual_provider_on_connection(&conn, original).unwrap();
@@ -2121,6 +2175,8 @@ command = "fixture-server"
             model: "gpt-5.5".into(),
             display_name: "Local label".into(),
             context_window: Some(256000),
+
+            compact_percent: None,
         }];
         upsert_ccswitch_provider_on_connection(&conn, original.clone(), "mapping-source").unwrap();
         let incoming = provider("external-id", "Fresh import", Some("fixture-key"));
@@ -2139,6 +2195,8 @@ command = "fixture-server"
             model: "gpt-5.5".into(),
             display_name: "Original model".into(),
             context_window: Some(128000),
+
+            compact_percent: None,
         }];
         let conn = open_db().unwrap();
         upsert_ccswitch_provider_on_connection(&conn, original.clone(), "mapping-rollback-source")
@@ -2168,7 +2226,7 @@ command = "fixture-server"
     }
 
     #[test]
-    fn immediate_copy_preserves_original_selection_and_complete_template() {
+    fn immediate_copy_preserves_selection_without_codex_owned_sections() {
         let mut conn = copy_test_connection();
         let dir = std::path::Path::new("/fixture/copy-selection");
         let mut original = provider("original", "Original", Some("fixture-key"));
@@ -2197,10 +2255,9 @@ command = "fixture-server"
             .parse::<DocumentMut>()
             .unwrap();
         assert_eq!(config["model_context_window"].as_integer(), Some(1_000_000));
-        assert_eq!(
-            config["mcp_servers"]["keep"]["command"].as_str(),
-            Some("fixture")
-        );
+        // model_context_window is a provider/model root and survives the copy;
+        // the MCP table is Codex-owned and is not duplicated into the copy.
+        assert!(config.get("mcp_servers").is_none());
         assert_eq!(
             provider_by_id_on_connection(&conn, &original.id)
                 .unwrap()
@@ -2953,15 +3010,15 @@ command = "keep-this-command"
             Some("keep-me")
         );
         assert_eq!(doc["model_provider"].as_str(), Some("proxy"));
-        assert_eq!(doc["approval_policy"].as_str(), Some("never"));
-        assert_eq!(
-            doc["model_providers"]["unrelated"]["name"].as_str(),
-            Some("Keep this provider")
-        );
-        assert_eq!(
-            doc["mcp_servers"]["docs"]["command"].as_str(),
-            Some("keep-this-command")
-        );
+        // A normalized template owns only its own provider. Sibling provider
+        // tables and Codex-owned root keys are dropped, never carried along.
+        assert!(doc.get("approval_policy").is_none());
+        assert!(doc["model_providers"]
+            .as_table()
+            .expect("providers")
+            .get("unrelated")
+            .is_none());
+        assert!(doc.get("mcp_servers").is_none());
         assert!(doc.get("experimental_bearer_token").is_none());
         assert!(doc["model_providers"]
             .as_table()

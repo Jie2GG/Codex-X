@@ -17,7 +17,7 @@ export type ProviderPreset = ProviderPresetChoice & {
   sources?: readonly string[];
 };
 
-const model = (id: string, displayName: string, contextWindow: number | null): ProviderModelMapping => ({ model: id, displayName, contextWindow });
+const model = (id: string, displayName: string, contextWindow: number | null): ProviderModelMapping => ({ model: id, displayName, contextWindow, compactPercent: null });
 const deepseekModels = [model("deepseek-v4-flash", "DeepSeek V4 Flash", 1048576), model("deepseek-v4-pro", "DeepSeek V4 Pro", 1048576)];
 const minimaxModels = [model("MiniMax-M3", "MiniMax M3", 1000000), model("MiniMax-M2.7", "MiniMax M2.7", 204800)];
 const mimoModels = [model("mimo-v2.5-pro", "MiMo V2.5 Pro", 1048576), model("mimo-v2.5", "MiMo V2.5", 1048576)];

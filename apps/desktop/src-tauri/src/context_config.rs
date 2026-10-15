@@ -52,12 +52,24 @@ fn restore_integer(doc: &mut DocumentMut, key: &str, number: Option<i64>) {
     }
 }
 
-/// Edits a supplied draft only; this never reads or writes the live configuration.
-/// `enabled = None` parses the checkbox state after a manual TOML edit.
-pub(crate) fn update_codex_context_window_inner(
+#[cfg(test)]
+fn update_codex_context_window_inner(
     config_text: String,
     enabled: Option<bool>,
     previous_values: Option<ContextWindowValues>,
+) -> Result<ContextWindowConfig> {
+    update_codex_context_window_with_override(config_text, enabled, previous_values, None)
+}
+
+/// Edits a supplied draft only; this never reads or writes the live configuration.
+/// `enabled = None` parses the checkbox state after a manual TOML edit, and
+/// `context_window_override` writes an exact window discovered upstream without
+/// touching the compact-token limit the 1M preset owns.
+pub(crate) fn update_codex_context_window_with_override(
+    config_text: String,
+    enabled: Option<bool>,
+    previous_values: Option<ContextWindowValues>,
+    context_window_override: Option<i64>,
 ) -> Result<ContextWindowConfig> {
     let mut doc = config_text
         .parse::<DocumentMut>()
@@ -100,16 +112,26 @@ pub(crate) fn update_codex_context_window_inner(
                 );
             }
         }
-        None => {}
+        None => {
+            if let Some(window) = context_window_override {
+                if !(1..=crate::providers::model_catalog::MAX_CONTEXT_WINDOW).contains(&window) {
+                    return Err(CodexxError::Config(format!(
+                        "模型上下文窗口须为 1 至 {} 之间的整数",
+                        crate::providers::model_catalog::MAX_CONTEXT_WINDOW
+                    )));
+                }
+                write_integer(&mut doc, CONTEXT_WINDOW, window);
+            }
+        }
     }
 
     let context_window = read_integer(&doc, CONTEXT_WINDOW)?;
     let compact_token_limit = read_integer(&doc, COMPACT_TOKEN_LIMIT)?;
     Ok(ContextWindowConfig {
-        config_text: if enabled.is_none() {
-            config_text
-        } else {
+        config_text: if enabled.is_some() || context_window_override.is_some() {
             doc.to_string()
+        } else {
+            config_text
         },
         enabled: context_window == Some(ONE_MILLION),
         values: ContextWindowValues {
@@ -122,6 +144,50 @@ pub(crate) fn update_codex_context_window_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_upstream_window_writes_the_exact_value_and_keeps_everything_else() {
+        let original = "# My Codex settings\nmodel = \"gpt-5.5\" # keep model\n\n[mcp_servers.notes]\ncommand = \"notes\"\n\n[model_providers.custom]\nbase_url = \"https://api.example.test/v1\"\n";
+        let result =
+            update_codex_context_window_with_override(original.into(), None, None, Some(200_000))
+                .unwrap();
+        let doc = result.config_text.parse::<DocumentMut>().unwrap();
+        assert_eq!(doc[CONTEXT_WINDOW].as_integer(), Some(200_000));
+        assert!(doc.get(COMPACT_TOKEN_LIMIT).is_none());
+        assert_eq!(
+            doc["mcp_servers"]["notes"]["command"].as_str(),
+            Some("notes")
+        );
+        assert!(result.config_text.contains("# My Codex settings"));
+        assert!(!result.enabled);
+
+        // Re-reading a draft must never shrink or grow what is already there, and
+        // an out-of-range probe result is refused instead of quietly guessed.
+        let kept = update_codex_context_window_with_override(
+            result.config_text.clone(),
+            None,
+            None,
+            Some(200_000),
+        )
+        .unwrap();
+        assert_eq!(kept.values.context_window, Some(200_000));
+        for invalid in [0, -1, 10_000_001] {
+            assert!(
+                update_codex_context_window_with_override(
+                    original.into(),
+                    None,
+                    None,
+                    Some(invalid)
+                )
+                .is_err(),
+                "{invalid}"
+            );
+        }
+        let parsed =
+            update_codex_context_window_with_override(original.into(), None, None, None).unwrap();
+        assert_eq!(parsed.config_text, original);
+        assert_eq!(parsed.values.context_window, None);
+    }
 
     #[test]
     fn enables_at_top_level_and_preserves_unrelated_tables_and_comments() {

@@ -97,6 +97,7 @@ function formProps(lang, protocol = "responses", overrides = {}) {
     providerForm: { providerName: "Fixture provider", baseUrl: "https://fixture.example/v1", apiKey: "", model: "fixture-model", wireApi: "responses", upstreamApi: protocol, requiresOpenaiAuth: false },
     providerModelMappings: [], providerAuthPreview: "Fixture auth preview",
     providerTomlDraft: 'model_provider = "custom"\n[model_providers.custom]\nname = "Fixture provider"\nhttp_headers = { "X-Title" = "Fixture Project" }\n',
+    providerTomlPreview: 'model_provider = "custom"\nmodel = "fixture-model"\n\n[mcp_servers.fixture]\ncommand = "fixture-server"\n\n[model_providers.custom]\nname = "Fixture provider"\nhttp_headers = { "X-Title" = "Fixture Project" }\n',
     copy: {
       formEyebrow: "Fixture", formAddTitle: text("新增供应商", "Add provider"), formEditTitle: text("编辑供应商", "Edit provider"),
       formHint: text("供应商配置", "Provider configuration"), cancelLabel: text("取消", "Cancel"),
@@ -104,12 +105,12 @@ function formProps(lang, protocol = "responses", overrides = {}) {
       showApiKeyLabel: text("显示密钥", "Show API key"), hideApiKeyLabel: text("隐藏密钥", "Hide API key"), baseUrlLabel: "Base URL",
       nameLabel: text("供应商名称", "Provider name"), modelLabel: text("模型", "Model"), fetchModelsLabel: text("获取模型", "Fetch models"), fetchingModelsLabel: text("获取中", "Fetching"),
       requiresAuthLabel: text("使用 OpenAI 认证", "Use OpenAI authentication"), authPreviewTitle: text("认证预览", "Authentication preview"), authPreviewDescription: "Fixture preview",
-      tomlTitle: "config.toml", tomlDescription: "Fixture TOML", resetTomlLabel: text("重置 TOML", "Reset TOML"), saveLabel: text("保存供应商", "Save provider"), savingLabel: text("保存中", "Saving"),
+      tomlTitle: "config.toml", tomlDescription: "Fixture TOML", copyTomlLabel: text("复制", "Copy"), saveLabel: text("保存供应商", "Save provider"), savingLabel: text("保存中", "Saving"),
     },
     onPresetSelect: noop, onPresetVariantSelect: noop, onProviderModelMappingsChange: noop, onCancelMode: noop,
     onApiKeyChange: noop, onBaseUrlChange: noop, onProviderNameChange: noop, onProviderModelChange: noop, onFetchModels: noop,
     onUpstreamApiChange: noop, onRequiresAuthChange: noop, onToggleApiKeyVisibility: noop,
-    onProviderTomlDraftChange: noop, onProviderHeadersConfigChange: noop, onResetProviderToml: noop, onSaveProvider: noop,
+    onProviderTomlDraftChange: noop, onProviderHeadersConfigChange: noop, onCopyProviderToml: noop, onSaveProvider: noop,
     ...overrides,
   };
 }
@@ -261,5 +262,104 @@ for (const lang of ["zh", "en"]) {
     const legacyChat = render(ProvidersPage, formProps(lang, "responses", { providerForm: { ...formProps(lang).providerForm, upstreamApi: null, wireApi: "chat" } }));
     assert.equal(selectedOption(protocolSelect(legacyChat)).attrs.value, "chat_completions");
     assert.ok(legacyChat.includes("cx-providers-protocol-hint"));
+  });
+
+  test(`the config editor shows a read-only merged preview instead of an editable template (${lang})`, async () => {
+    const { ProvidersPage } = await ui();
+    const props = formProps(lang);
+    assert.ok(!props.providerTomlDraft.includes("[mcp_servers."), "the editable template must stay provider-only");
+    const html = render(ProvidersPage, props);
+    const editor = control(html, "textarea", "config.toml");
+    assert.ok(editor.tag.includes("readonly"), "the merged preview must not be hand-editable any more");
+    assert.ok(editor.tag.includes("[mcp_servers.fixture]"), "the preview must show that Codex's own MCP server survives the switch");
+    assert.ok(!html.includes(zh ? "重置 TOML" : "Reset TOML"), "resetting to a generated document would re-open the overwrite bug");
+
+    const copyLabel = zh ? "复制" : "Copy";
+    assert.equal(control(html, "button", copyLabel).attrs.disabled, undefined);
+    const empty = render(ProvidersPage, { ...props, providerTomlPreview: "" });
+    assert.notEqual(control(empty, "button", copyLabel).attrs.disabled, undefined);
+  });
+
+  test(`the API section runs name, URL, key, protocol, discovery, then auth (${lang})`, async () => {
+    const { ProvidersPage } = await ui();
+    const props = formProps(lang);
+    const html = render(ProvidersPage, props);
+    const start = html.indexOf("<h3>API</h3>");
+    const end = html.indexOf('class="cx-provider-headers-control"');
+    assert.ok(start >= 0 && end > start, "the API section must sit between the presets and the headers control");
+    const section = html.slice(start, end);
+    const fetchButton = control(section, "button", props.copy.fetchModelsLabel);
+    const positions = [
+      section.indexOf(`<span>${props.copy.nameLabel}</span>`),
+      section.indexOf(`<span>${props.copy.baseUrlLabel}</span>`),
+      section.indexOf(`<span>${props.copy.apiKeyLabel}</span>`),
+      section.indexOf(zh ? "<span>上游接口协议</span>" : "<span>Upstream API protocol</span>"),
+      section.indexOf(fetchButton.tag),
+      section.indexOf(props.copy.requiresAuthLabel),
+    ];
+    positions.forEach((at, index) => assert.ok(at >= 0, `control ${index} belongs inside the API section`));
+    for (let index = 1; index < positions.length; index += 1) {
+      assert.ok(positions[index - 1] < positions[index], `control ${index} must follow control ${index - 1}`);
+    }
+    assert.ok(
+      section.includes('class="cx-providers-form-grid cx-providers-form-grid--single"'),
+      "one readable column beats a three column grid for a six field form",
+    );
+    assert.ok(!section.includes("<datalist"), "the fetched list belongs to the mappings, not a second model input");
+    assert.ok(!section.includes("cx-providers-model-select"), "the model picker moved into the mappings");
+    assert.ok(!section.includes(`<span>${props.copy.modelLabel}</span>`), "the API section no longer owns a model field");
+  });
+
+  test(`the mapping rows own the default model through one radio group (${lang})`, async () => {
+    const { ProvidersPage } = await ui();
+    const rows = [
+      { model: "gpt-5.5", displayName: "GPT 5.5", contextWindow: 128000, compactPercent: 75 },
+      { model: "gpt-5.4", displayName: "GPT 5.4", contextWindow: null, compactPercent: null },
+    ];
+    const html = render(ProvidersPage, formProps(lang, "responses", {
+      providerModelMappings: rows,
+      providerForm: { ...formProps(lang).providerForm, model: "gpt-5.4" },
+    }));
+    const radios = elements(html, "input").filter(({ attrs }) => attrs.type === "radio");
+    assert.equal(radios.length, rows.length, "every mapping row gets exactly one default marker");
+    const checked = radios.filter(({ attrs }) => "checked" in attrs);
+    assert.equal(checked.length, 1, "exactly one row may be the default model");
+    assert.equal(checked[0].attrs["aria-label"], zh ? "设为默认模型 · gpt-5.4" : "Set the default model · gpt-5.4");
+    assert.equal(new Set(radios.map(({ attrs }) => attrs.name)).size, 1, "the markers must share one radio group");
+    assert.ok(radios.every(({ attrs }) => !("disabled" in attrs)), "a row with a model ID can always claim the default");
+    assert.ok(html.includes(zh ? "设为默认模型 · gpt-5.5" : "Set the default model · gpt-5.5"), "the unchecked row still names its model");
+    assert.ok(html.includes(zh ? "勾选的模型会写入 config.toml" : "The checked model becomes the model in config.toml"));
+
+    const blank = render(ProvidersPage, formProps(lang, "responses", {
+      providerModelMappings: [{ model: "", displayName: "", contextWindow: null, compactPercent: null }],
+      providerForm: { ...formProps(lang).providerForm, model: "" },
+    }));
+    const [blankRadio] = elements(blank, "input").filter(({ attrs }) => attrs.type === "radio");
+    assert.ok("disabled" in blankRadio.attrs, "a row without a model ID cannot become the default");
+  });
+
+  test(`each mapping row keeps its own compaction share (${lang})`, async () => {
+    const { ProvidersPage } = await ui();
+    const label = zh ? "压缩比例 % · 第 1 行" : "Compaction % · Row 1";
+    const html = render(ProvidersPage, formProps(lang, "responses", {
+      providerModelMappings: [
+        { model: "gpt-5.5", displayName: "GPT 5.5", contextWindow: 128000, compactPercent: 75 },
+        { model: "gpt-5.4", displayName: "GPT 5.4", contextWindow: null, compactPercent: null },
+      ],
+      providerForm: { ...formProps(lang).providerForm, model: "gpt-5.5" },
+    }));
+    assert.equal(control(html, "input", label).attrs.value, "75", "the share belongs to that row alone");
+    assert.equal(control(html, "input", zh ? "压缩比例 % · 第 2 行" : "Compaction % · Row 2").attrs.value, "", "a blank share defers to Codex");
+    assert.ok(html.includes(zh ? "切换模型时每个模型保留自己的窗口与比例" : "Each model keeps its own window and share when you switch"));
+
+    const invalid = render(ProvidersPage, formProps(lang, "responses", {
+      providerModelMappings: [{ model: "gpt-5.5", displayName: "GPT", contextWindow: 128000, compactPercent: 0 }],
+      providerForm: { ...formProps(lang).providerForm, model: "gpt-5.5" },
+    }));
+    const bad = control(invalid, "input", label);
+    assert.equal(bad.attrs["aria-invalid"], "true");
+    const error = elements(invalid, "small").find(({ attrs }) => attrs.id === bad.attrs["aria-describedby"]);
+    assert.ok(error?.tag.includes(zh ? "请填写 1 至 99 的整数" : "Enter a whole number from 1 to 99"));
+    assert.ok(invalid.includes(zh ? "请先修正模型映射中的错误" : "Correct the model mapping errors before saving"), "an impossible share blocks the save");
   });
 }

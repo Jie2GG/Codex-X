@@ -572,7 +572,7 @@ pub(crate) fn detected_live_custom_provider(codex_dir: &Path) -> Result<Option<S
         .name
         .filter(|name| !name.trim().is_empty())
         .unwrap_or_else(|| provider_id.clone());
-    let toml_config = provider_template_from_document(&doc, &provider_id, &model)?;
+    let toml_config = provider_template_from_document(&doc, &provider_id, &model, &[])?;
 
     Ok(Some(SavedProvider {
         id: provider_id,
@@ -613,14 +613,44 @@ const PROVIDER_MODEL_ROOTS: &[&str] = &[
     "disable_response_storage",
 ];
 
+pub(crate) fn is_provider_only_root(key: &str) -> bool {
+    PROVIDER_MODEL_ROOTS.contains(&key)
+        || matches!(
+            key,
+            "model_provider" | "model_providers" | "experimental_bearer_token"
+        )
+}
+
 fn is_provider_only_document(doc: &DocumentMut) -> bool {
-    doc.as_table().iter().all(|(key, _)| {
-        PROVIDER_MODEL_ROOTS.contains(&key)
-            || matches!(
-                key,
-                "model_provider" | "model_providers" | "experimental_bearer_token"
-            )
-    })
+    doc.as_table()
+        .iter()
+        .all(|(key, _)| is_provider_only_root(key))
+}
+
+/// Drop every Codex-owned section and root key, keeping only what a provider
+/// selection owns. Saved templates, live detections and cc-switch imports all
+/// pass through here, so a later write can never replace MCP servers, desktop
+/// settings, projects or the user's comments.
+pub(crate) fn retain_provider_only_roots(doc: &mut DocumentMut, provider_id: &str) {
+    let foreign: Vec<String> = doc
+        .as_table()
+        .iter()
+        .filter(|(key, _)| !is_provider_only_root(key))
+        .map(|(key, _)| key.to_string())
+        .collect();
+    for key in foreign {
+        doc.as_table_mut().remove(&key);
+    }
+    if let Some(providers) = doc.get_mut("model_providers").and_then(Item::as_table_mut) {
+        let siblings: Vec<String> = providers
+            .iter()
+            .filter(|(key, _)| *key != provider_id)
+            .map(|(key, _)| key.to_string())
+            .collect();
+        for key in siblings {
+            providers.remove(&key);
+        }
+    }
 }
 
 fn common_config_handled(codex_dir: &Path) -> Result<bool> {
@@ -1172,13 +1202,7 @@ fn merge_provider_toml_into_live(
     provider_text: &str,
     explicit_api_key: Option<String>,
 ) -> Result<(DocumentMut, Option<String>)> {
-    merge_provider_toml_into_live_with_policy(
-        cfg,
-        current_text,
-        provider_text,
-        explicit_api_key,
-        false,
-    )
+    merge_provider_toml_into_live_with_policy(cfg, current_text, provider_text, explicit_api_key)
 }
 
 fn merge_provider_toml_into_live_with_policy(
@@ -1186,7 +1210,6 @@ fn merge_provider_toml_into_live_with_policy(
     current_text: &str,
     provider_text: &str,
     explicit_api_key: Option<String>,
-    explicit_full_config: bool,
 ) -> Result<(DocumentMut, Option<String>)> {
     let source = parse_toml_document(cfg, provider_text)?;
     let model = string_value(&source, "model")
@@ -1251,28 +1274,46 @@ fn merge_provider_toml_into_live_with_policy(
         requires_openai_auth,
     );
 
-    // New and cc-switch imports carry a complete provider config. Treat it as
-    // authoritative so provider-specific desktop/features/plugin settings make
-    // the round trip. Older Codex-X records contained only the route/model;
-    // those sparse templates inherit the current common settings for backward
-    // compatibility.
-    let has_multiple_provider_tables = source
-        .get("model_providers")
-        .and_then(|item| item.as_table())
-        .is_some_and(|providers| providers.len() > 1);
-    let has_complete_config = has_multiple_provider_tables
-        || source
-            .as_table()
-            .iter()
-            .any(|(key, _)| !matches!(key, "model_provider" | "model" | "model_providers"));
-    let mut live = if explicit_full_config || has_complete_config {
-        source
-    } else {
-        parse_toml_document(cfg, current_text)?
-    };
+    // The live file is always the base. A provider template owns only its own
+    // selection, so MCP servers, desktop settings, projects and comments that
+    // Codex added after the template was captured survive this write untouched.
+    let mut live = parse_toml_document(cfg, current_text)?;
     strip_provider_bearer_tokens(&mut live);
     live["model_provider"] = value("custom");
     live["model"] = value(model);
+    // Model-scoped preferences travel with the selection and the template
+    // defines the final set: a model preference it drops is removed from the
+    // live file too, except the catalog pointer that prepare_model_catalog
+    // owns. Every other root key belongs to Codex and keeps its live value, so
+    // a template captured before an MCP server was added cannot erase it.
+    for key in PROVIDER_MODEL_ROOTS {
+        if *key == "model" {
+            continue;
+        }
+        match source.get(key) {
+            Some(item) => {
+                live.as_table_mut().insert(key, item.clone());
+            }
+            None if *key != "model_catalog_json" => {
+                live.as_table_mut().remove(key);
+            }
+            None => {}
+        }
+    }
+    // A template may reintroduce a Codex-owned section that the live file lost,
+    // for example integration tables recovered from an official snapshot, but it
+    // must never replace one that is already there. The root bearer token is the
+    // one provider-owned key excluded even from that: configure_live_provider_auth
+    // has already routed it into auth.json, so writing it here would leak it back
+    // into a file Codex reads in plain text.
+    for (key, item) in source.as_table().iter() {
+        if key == "experimental_bearer_token" {
+            continue;
+        }
+        if live.get(key).is_none() {
+            live.as_table_mut().insert(key, item.clone());
+        }
+    }
     let providers = ensure_table(live.as_table_mut(), "model_providers")?;
     providers.remove("custom");
     if source_provider_id != "custom" {
@@ -1291,14 +1332,7 @@ fn save_provider_toml_config_locked<F>(
 where
     F: FnOnce(&Path) -> Result<()>,
 {
-    save_provider_toml_config_with_catalog_locked(
-        codex_dir,
-        input,
-        old_config,
-        pre_persist,
-        None,
-        false,
-    )
+    save_provider_toml_config_with_catalog_locked(codex_dir, input, old_config, pre_persist, None)
 }
 
 fn save_provider_toml_config_with_catalog_locked<F>(
@@ -1307,7 +1341,6 @@ fn save_provider_toml_config_with_catalog_locked<F>(
     old_config: Option<Vec<u8>>,
     pre_persist: F,
     saved: Option<&SavedProvider>,
-    explicit_full_config: bool,
 ) -> Result<ActionResult>
 where
     F: FnOnce(&Path) -> Result<()>,
@@ -1324,7 +1357,6 @@ where
             &current_text,
             input.config_text.trim_end(),
             input.api_key,
-            explicit_full_config,
         )?;
         if let Some(saved) = saved {
             // Resolve the menu after sparse legacy templates inherit common
@@ -1571,21 +1603,12 @@ pub(crate) fn save_active_provider_inner(
     save_active_provider_with_apply(provider, config_dir, apply_saved_provider_locked)
 }
 
-pub(crate) fn save_active_provider_with_common_config_inner(
-    provider: SavedProvider,
-    config_dir: Option<String>,
-) -> Result<ActionResult> {
-    save_active_provider_with_apply(provider, config_dir, |saved, dir, before| {
-        apply_saved_provider_with_policy_locked(saved, dir, before, true)
-    })
-}
-
 fn apply_saved_provider_locked(
     saved: &SavedProvider,
     codex_dir: &Path,
     active_config: Option<Vec<u8>>,
 ) -> Result<ActionResult> {
-    apply_saved_provider_with_policy_locked(saved, codex_dir, active_config, false)
+    apply_saved_provider_with_policy_locked(saved, codex_dir, active_config)
 }
 
 fn provider_activation_document(saved: &SavedProvider, codex_dir: &Path) -> Result<DocumentMut> {
@@ -1629,6 +1652,21 @@ fn provider_activation_document(saved: &SavedProvider, codex_dir: &Path) -> Resu
     ensure_table(current.as_table_mut(), "model_providers")?.insert(&provider_id, table);
     strip_provider_bearer_tokens(&mut current);
     Ok(current)
+}
+
+/// Render the config.toml that activating this provider would produce, without
+/// touching the disk. The live file stays the base, so the preview shows the MCP
+/// servers, projects and desktop settings Codex owns sitting right next to the
+/// provider selection the user is editing.
+pub(crate) fn preview_provider_toml_inner(
+    provider: SavedProvider,
+    config_dir: Option<String>,
+) -> Result<String> {
+    let codex_dir = resolve_codex_dir(config_dir)?;
+    Ok(provider_activation_document(&provider, &codex_dir)?
+        .to_string()
+        .trim_end()
+        .to_string())
 }
 
 pub(super) fn official_activation_config_text(
@@ -1686,38 +1724,22 @@ fn apply_saved_provider_with_policy_locked(
     saved: &SavedProvider,
     codex_dir: &Path,
     active_config: Option<Vec<u8>>,
-    apply_common_config: bool,
 ) -> Result<ActionResult> {
     if !saved.model_mappings.is_empty() && saved.wire_api != "responses" {
         return Err(CodexxError::Config(
             "模型映射需要供应商提供 Responses 兼容接口，请检查 Wire API 设置".into(),
         ));
     }
-    let config_text = if apply_common_config {
-        match saved.toml_config.as_deref() {
-            Some(text) => {
-                let doc = parse_toml_document(&config_path(codex_dir), text)?;
-                crate::failover::direct_document(codex_dir, &doc)?.to_string()
-            }
-            None => build_provider_toml_draft_inner(
-                saved.clone(),
-                Some(codex_dir.display().to_string()),
-            )?,
-        }
-    } else {
-        provider_activation_document(saved, codex_dir)?.to_string()
-    };
     save_provider_toml_config_with_catalog_locked(
         codex_dir,
         ProviderTomlInput {
             config_dir: None,
-            config_text,
+            config_text: provider_activation_document(saved, codex_dir)?.to_string(),
             api_key: saved.api_key.clone(),
         },
         active_config,
         |_| Ok(()),
         Some(saved),
-        true,
     )
 }
 
@@ -1769,6 +1791,27 @@ mod tests {
     use serde_json::json;
     use std::fs;
     use std::sync::atomic::{AtomicU64, Ordering};
+
+    #[test]
+    fn a_root_bearer_token_is_harvested_but_never_written_back_to_the_live_file() {
+        let live = "model_provider = \"openai\"\nmodel = \"official-model\"\n\n[mcp_servers.notes]\ncommand = \"notes\"\n";
+        let source = "model_provider = \"custom\"\nmodel = \"gpt-5.6-sol\"\nexperimental_bearer_token = \"sk-root-leak\"\n\n[model_providers.custom]\nname = \"Root Token Proxy\"\nbase_url = \"https://root.example.test/v1\"\nwire_api = \"responses\"\nrequires_openai_auth = true\n";
+        let (merged, api_key) =
+            merge_provider_toml_into_live(Path::new("config.toml"), live, source, None)
+                .expect("merge a template carrying a root bearer token");
+
+        assert_eq!(api_key.as_deref(), Some("sk-root-leak"));
+        let text = merged.to_string();
+        assert!(
+            !text.contains("sk-root-leak"),
+            "the key belongs to auth.json, so config.toml must never receive it: {text}"
+        );
+        assert_eq!(merged["model"].as_str(), Some("gpt-5.6-sol"));
+        assert_eq!(
+            merged["mcp_servers"]["notes"]["command"].as_str(),
+            Some("notes")
+        );
+    }
 
     #[test]
     fn header_values_survive_direct_toml_activation_and_invalid_values_are_rejected() {
@@ -2189,7 +2232,7 @@ base_url = "https://proxy.example.com/v1"
     }
 
     #[test]
-    fn complete_provider_template_replaces_live_common_config() {
+    fn provider_template_never_touches_codex_owned_sections() {
         let current = r#"# keep-live-comment
 model_provider = "custom"
 model = "model-a"
@@ -2244,24 +2287,27 @@ trust_level = "untrusted"
         .expect("merge provider template");
         let text = merged.to_string();
 
-        assert!(!text.contains("# keep-live-comment"));
+        assert!(text.contains("# keep-live-comment"));
         assert_eq!(merged["model_provider"].as_str(), Some("custom"));
         assert_eq!(merged["model"].as_str(), Some("model-b"));
-        assert_eq!(merged["approval_policy"].as_str(), Some("on-request"));
+        // approval_policy and [features] belong to Codex, so the live values win
+        // even though a historical template carried different ones. Only
+        // PROVIDER_MODEL_ROOTS such as service_tier travel with the template.
+        assert_eq!(merged["approval_policy"].as_str(), Some("never"));
         assert_eq!(merged["service_tier"].as_str(), Some("flex"));
         assert!(merged.get("model_reasoning_effort").is_none());
         assert!(merged.get("disable_response_storage").is_none());
-        assert_eq!(merged["features"]["js_repl"].as_bool(), Some(true));
+        assert_eq!(merged["features"]["js_repl"].as_bool(), Some(false));
         assert_eq!(
-            merged["mcp_servers"]["stale"]["command"].as_str(),
-            Some("stale-server")
+            merged["mcp_servers"]["live"]["command"].as_str(),
+            Some("live-server")
         );
-        assert!(merged["mcp_servers"].get("live").is_none());
+        assert!(merged["mcp_servers"].get("stale").is_none());
         assert_eq!(
-            merged["projects"]["/stale/project"]["trust_level"].as_str(),
-            Some("untrusted")
+            merged["projects"]["/live/project"]["trust_level"].as_str(),
+            Some("trusted")
         );
-        assert!(merged["projects"].get("/live/project").is_none());
+        assert!(merged["projects"].get("/stale/project").is_none());
         assert_eq!(
             merged["model_providers"]["custom"]["name"].as_str(),
             Some("Provider B")
@@ -2280,7 +2326,7 @@ trust_level = "untrusted"
     }
 
     #[test]
-    fn provider_toml_draft_preserves_full_config_without_writing_live_files() {
+    fn provider_toml_draft_carries_only_the_selection_without_writing_live_files() {
         let codex_dir = active_provider_test_dir("full-draft", 40_001);
         let current = r#"# keep-draft-comment
 model_provider = "custom"
@@ -2362,19 +2408,11 @@ command = "docs-server"
             doc["model_providers"]["custom"]["request_max_retries"].as_integer(),
             Some(5)
         );
-        assert_eq!(
-            doc["projects"]["/work/project"]["trust_level"].as_str(),
-            Some("trusted")
-        );
-        assert_eq!(
-            doc["plugins"]["browser@openai-bundled"]["enabled"].as_bool(),
-            Some(true)
-        );
-        assert_eq!(doc["features"]["js_repl"].as_bool(), Some(false));
-        assert_eq!(
-            doc["mcp_servers"]["docs"]["command"].as_str(),
-            Some("docs-server")
-        );
+        // Codex-owned sections stay out of the draft; the live file keeps them.
+        assert!(doc.get("projects").is_none());
+        assert!(doc.get("plugins").is_none());
+        assert!(doc.get("features").is_none());
+        assert!(doc.get("mcp_servers").is_none());
         assert!(doc.get("experimental_bearer_token").is_none());
         assert!(doc["model_providers"]
             .as_table()
@@ -2456,7 +2494,7 @@ command = "docs-server"
     }
 
     #[test]
-    fn new_provider_template_keeps_common_settings_without_reusing_websocket_capability() {
+    fn new_provider_template_keeps_provider_settings_without_reusing_websocket_capability() {
         let dir = active_provider_test_dir("transport-new-origin", 40_024);
         let mut target =
             active_provider_fixture(40_024, "proxy", "My proxy", "model", "fixture-key");
@@ -2478,10 +2516,7 @@ command = "docs-server"
                 draft["model_providers"]["custom"]["request_max_retries"].as_integer(),
                 Some(7)
             );
-            assert_eq!(
-                draft["mcp_servers"]["docs"]["command"].as_str(),
-                Some("fixture-mcp")
-            );
+            assert!(draft.get("mcp_servers").is_none());
         }
         assert!(!config_path(&dir).exists());
         fs::remove_dir_all(dir).unwrap();
@@ -2717,11 +2752,15 @@ command = "docs-server"
                 model: "before".into(),
                 display_name: "Saved model".into(),
                 context_window: Some(128000),
+
+                compact_percent: None,
             },
             super::super::model_catalog::ProviderModelMapping {
                 model: "external-model".into(),
                 display_name: "Other supported model".into(),
                 context_window: Some(256000),
+
+                compact_percent: None,
             },
         ];
         let original = save_provider_inner(mapped).unwrap();
@@ -2907,11 +2946,15 @@ env_http_headers = { aUtHoRiZaTiOn = "STALE_AUTH", "X-Project" = "PROJECT_ENV" }
                 model: "deepseek-chat".into(),
                 display_name: "DeepSeek V3".into(),
                 context_window: Some(128000),
+
+                compact_percent: None,
             },
             super::super::model_catalog::ProviderModelMapping {
                 model: "deepseek-reasoner".into(),
                 display_name: "DeepSeek R1".into(),
                 context_window: Some(256000),
+
+                compact_percent: None,
             },
         ];
         save_provider_inner(provider.clone()).unwrap();
@@ -2998,6 +3041,8 @@ env_http_headers = { aUtHoRiZaTiOn = "STALE_AUTH", "X-Project" = "PROJECT_ENV" }
             model: "deepseek-chat".into(),
             display_name: "DeepSeek".into(),
             context_window: None,
+
+            compact_percent: None,
         }];
         let mapped = save_provider_inner(mapped).unwrap();
         let plain = save_provider_inner(active_provider_fixture(
@@ -3102,6 +3147,8 @@ env_http_headers = { aUtHoRiZaTiOn = "STALE_AUTH", "X-Project" = "PROJECT_ENV" }
             model: "deepseek-chat".into(),
             display_name: "DeepSeek".into(),
             context_window: None,
+
+            compact_percent: None,
         }];
         let target = save_provider_inner(target).unwrap();
         fs::write(dir.join(".codex-x"), "fixture blocks generated directory").unwrap();
@@ -3117,6 +3164,8 @@ env_http_headers = { aUtHoRiZaTiOn = "STALE_AUTH", "X-Project" = "PROJECT_ENV" }
             model: "before".into(),
             display_name: "Mapped before".into(),
             context_window: None,
+
+            compact_percent: None,
         }];
         assert!(save_active_provider_inner(updated, Some(dir.display().to_string())).is_err());
         assert_eq!(saved_provider(&original.id), original);
@@ -3608,8 +3657,10 @@ experimental_bearer_token = "sk-external"
             assert_eq!(retained.api_key, live.api_key);
             assert_eq!(retained.provider_name, name);
             let retained_config = retained.toml_config.clone().unwrap();
-            assert!(retained_config.contains("approval_policy = \"never\""));
-            assert!(retained_config.contains("docs-server"));
+            // The adopted record keeps only its selection; Codex-owned keys
+            // that happened to be live at detection time are not captured.
+            assert!(!retained_config.contains("approval_policy"));
+            assert!(!retained_config.contains("docs-server"));
 
             save_provider_toml_config_inner(ProviderTomlInput {
                 config_dir: config_dir.clone(),
@@ -3730,7 +3781,7 @@ experimental_bearer_token = "sk-external"
     }
 
     #[test]
-    fn detected_live_provider_only_captures_runtime_config_after_explicit_copy_selection() {
+    fn detected_live_provider_captures_only_the_selection_after_explicit_copy() {
         let _db_guard = crate::app_db::test_db_guard();
         let tag = 40_006;
         let codex_dir = active_provider_test_dir("detected-ambiguous", tag);
@@ -3777,11 +3828,10 @@ experimental_bearer_token = "sk-external"
             .unwrap()
             .parse::<DocumentMut>()
             .unwrap();
-        assert_eq!(config["approval_policy"].as_str(), Some("never"));
-        assert_eq!(
-            config["mcp_servers"]["docs"]["command"].as_str(),
-            Some("docs-server")
-        );
+        // The adopted record owns only its selection. Codex-owned keys that
+        // happened to be live at detection time are not captured.
+        assert!(config.get("approval_policy").is_none());
+        assert!(config.get("mcp_servers").is_none());
         assert!(config["model_providers"]["custom"]
             .get("experimental_bearer_token")
             .is_none());
@@ -3815,7 +3865,7 @@ mode = "current-future-mode"
 "#;
 
     #[test]
-    fn thin_provider_draft_inherits_live_common_and_keeps_explicit_model_preferences() {
+    fn thin_provider_draft_carries_model_preferences_without_codex_sections() {
         let dir = active_provider_test_dir("thin-draft-inheritance", 70_001);
         let current = active_provider_fixture(70_001, "current", "Current", "old-model", "old-key");
         let text = format!(
@@ -3846,19 +3896,11 @@ mode = "current-future-mode"
             )
             .unwrap();
             let draft = draft.parse::<DocumentMut>().unwrap();
-            assert_eq!(
-                draft["mcp_servers"]["current"]["env"]["MCP_KEY"].as_str(),
-                Some("current-mcp-key")
-            );
-            assert_eq!(draft["desktop"]["notifications"].as_bool(), Some(false));
-            assert_eq!(
-                draft["marketplaces"]["fixture"]["source"].as_str(),
-                Some("current-local-source")
-            );
-            assert_eq!(
-                draft["future_common"]["mode"].as_str(),
-                Some("current-future-mode")
-            );
+            // A draft owns only the selection: Codex-owned sections never ride
+            // it, while model-scoped roots still come from the saved template.
+            for key in ["mcp_servers", "desktop", "marketplaces", "future_common"] {
+                assert!(draft.get(key).is_none(), "draft carried {key}");
+            }
             assert_eq!(draft["model"].as_str(), Some("new-model"));
             assert_eq!(draft["model_reasoning_effort"].as_str(), Some("low"));
             assert_eq!(draft["model_context_window"].as_integer(), Some(128000));
@@ -4053,7 +4095,7 @@ mode = "current-future-mode"
     }
 
     #[test]
-    fn active_edits_preserve_common_by_default_and_apply_explicit_manual_removal() {
+    fn active_edits_never_remove_codex_owned_sections() {
         let _guard = crate::app_db::test_db_guard();
         let dir = active_provider_test_dir("active-common-policy", 70_006);
         let provider = save_provider_inner(active_provider_fixture(
@@ -4087,18 +4129,20 @@ mode = "current-future-mode"
             Some("current-mcp")
         );
         let edited = saved_provider(&provider.id);
-        // The explicit editor supplied only provider settings: deleted common
-        // tables must stay deleted rather than being silently inherited again.
-        save_active_provider_with_common_config_inner(edited, Some(dir.display().to_string()))
-            .unwrap();
-        let after_explicit = fs::read_to_string(config_path(&dir))
+        // A saved template owns only its own selection, so re-saving the active
+        // provider must leave every Codex-owned section exactly where it was.
+        save_active_provider_inner(edited, Some(dir.display().to_string())).unwrap();
+        let after_reapply = fs::read_to_string(config_path(&dir))
             .unwrap()
             .parse::<DocumentMut>()
             .unwrap();
-        assert!(after_explicit.get("mcp_servers").is_none());
-        assert!(after_explicit.get("desktop").is_none());
-        assert!(after_explicit.get("future_common").is_none());
-        assert_eq!(after_explicit["model"].as_str(), Some("new-model"));
+        assert_eq!(
+            after_reapply["mcp_servers"]["current"]["command"].as_str(),
+            Some("current-mcp")
+        );
+        assert!(after_reapply.get("desktop").is_some());
+        assert!(after_reapply.get("future_common").is_some());
+        assert_eq!(after_reapply["model"].as_str(), Some("new-model"));
         delete_provider_inner(&provider.id).unwrap();
         fs::remove_dir_all(dir).unwrap();
     }
@@ -4138,7 +4182,7 @@ mode = "current-future-mode"
     }
 
     #[test]
-    fn new_or_changed_provider_drafts_drop_vendor_credentials_but_keep_mcp_env() {
+    fn new_or_changed_provider_drafts_drop_vendor_credentials_and_codex_sections() {
         let dir = active_provider_test_dir("credential-inheritance", 70_008);
         let mut source =
             active_provider_fixture(70_008, "credential-source", "Source", "model", "source-key");
@@ -4176,10 +4220,7 @@ mode = "current-future-mode"
                     "unexpected inherited {key}"
                 );
             }
-            assert_eq!(
-                doc["mcp_servers"]["current"]["env"]["MCP_KEY"].as_str(),
-                Some("current-mcp-key")
-            );
+            assert!(doc.get("mcp_servers").is_none());
         }
         assert!(!config_path(&dir).exists());
         assert!(!auth_path(&dir).exists());
@@ -4236,13 +4277,11 @@ mode = "current-future-mode"
             !common_config_handled(&dir).unwrap(),
             "inactive save must not consume recovery"
         );
-        // Explicitly applying the edited minimal document intentionally removes
-        // all integration tables even though an older official snapshot has them.
-        save_active_provider_with_common_config_inner(
-            current.clone(),
-            Some(dir.display().to_string()),
-        )
-        .unwrap();
+        // The user removed every integration table by hand, leaving a
+        // provider-only live file. Marking it handled must stop an older
+        // official snapshot from resurrecting those tables afterwards.
+        fs::write(config_path(&dir), current.toml_config.as_ref().unwrap()).unwrap();
+        mark_common_config_handled(&dir).unwrap();
         assert!(common_config_handled(&dir).unwrap());
         let base = get_provider_config_base_inner(Some(dir.display().to_string()))
             .unwrap()

@@ -26,6 +26,9 @@ export type ProviderModelMapping = {
   model: string;
   displayName: string;
   contextWindow: number | null;
+  // Share of this model's own window that triggers auto compaction, so each
+  // entry in the menu keeps its limit instead of one global number.
+  compactPercent: number | null;
 };
 
 export type SavedProvider = {
@@ -196,12 +199,23 @@ export type ProviderConnectionResult = {
 export type ProviderModel = {
   id: string;
   created?: number | null;
+  contextWindow?: number | null;
 };
 
 export type ProviderModelsResult = {
   models: ProviderModel[];
   status: number;
   durationMs: number;
+};
+
+export type ContextWindowValues = {
+  contextWindow: number | null;
+  compactTokenLimit: number | null;
+};
+
+export type ContextWindowConfig = ContextWindowValues & {
+  configText: string;
+  enabled: boolean;
 };
 
 export type SessionSyncResult = {

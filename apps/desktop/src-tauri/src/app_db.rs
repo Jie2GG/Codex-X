@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
-const APP_DB_SCHEMA_VERSION: i64 = 9;
+const APP_DB_SCHEMA_VERSION: i64 = 10;
 
 struct DatabaseInitializer {
     migration_lock: Mutex<()>,
@@ -582,10 +582,14 @@ mod tests {
 
         let initializer = DatabaseInitializer::new();
         let migrated = initializer.open_at(&path).unwrap();
-        assert_eq!(schema_version(&migrated).unwrap(), 9);
-        assert!(table_column_set(&migrated, "providers")
-            .unwrap()
-            .contains("upstream_api"));
+        assert_eq!(schema_version(&migrated).unwrap(), APP_DB_SCHEMA_VERSION);
+        let migrated_columns = table_column_set(&migrated, "providers").unwrap();
+        assert!(migrated_columns.contains("upstream_api"));
+        // Columns added after v9 (stream idle timeout / retries) must also be
+        // back-filled: open_at_with skips initialize_schema once the stored
+        // user_version already matches, so any new column needs a version bump.
+        assert!(migrated_columns.contains("stream_idle_timeout_ms"));
+        assert!(migrated_columns.contains("stream_max_retries"));
         assert_eq!(
             snapshot(&migrated),
             before,
@@ -612,7 +616,7 @@ mod tests {
         drop(migrated);
 
         let reopened = DatabaseInitializer::new().open_at(&path).unwrap();
-        assert_eq!(schema_version(&reopened).unwrap(), 9);
+        assert_eq!(schema_version(&reopened).unwrap(), APP_DB_SCHEMA_VERSION);
         assert_eq!(
             snapshot(&reopened),
             before,

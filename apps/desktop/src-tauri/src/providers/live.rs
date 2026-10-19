@@ -3677,6 +3677,30 @@ experimental_bearer_token = "sk-external"
     }
 
     #[test]
+    fn detected_live_provider_hydrates_stream_knobs_from_the_live_table() {
+        let tag = 30_004;
+        let codex_dir = active_provider_test_dir("detected-stream", tag);
+        let live = r#"model_provider = "custom"
+model = "gpt-5.5"
+
+[model_providers.custom]
+name = "Stream Detected"
+base_url = "https://stream.example.com/v1"
+wire_api = "responses"
+requires_openai_auth = false
+stream_idle_timeout_ms = 5000000
+stream_max_retries = 3
+"#;
+        write_text(&config_path(&codex_dir), live).expect("write live config");
+        let detected = detected_live_custom_provider(&codex_dir)
+            .expect("detect the live provider")
+            .expect("a third-party live route is present");
+        assert_eq!(detected.stream_idle_timeout_ms, Some(5_000_000));
+        assert_eq!(detected.stream_max_retries, Some(3));
+        fs::remove_dir_all(codex_dir).expect("remove detected stream test directory");
+    }
+
+    #[test]
     fn detected_live_provider_survives_activation_and_later_provider_switches() {
         let _db_guard = crate::app_db::test_db_guard();
         for activate_first in [false, true] {

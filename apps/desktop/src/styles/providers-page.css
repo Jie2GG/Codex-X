@@ -1005,6 +1005,8 @@
 .cx-providers-advanced-chevron { flex-shrink: 0; color: var(--cx-provider-muted); transition: transform 140ms ease; }
 .cx-providers-advanced[open] > summary .cx-providers-advanced-chevron { transform: rotate(180deg); }
 .cx-providers-advanced-body { padding: 2px 15px 15px; border-top: 1px solid var(--cx-provider-border-soft); }
+/* The message slot is reserved even when empty, so the two columns keep equal height. */
+.cx-provider-stream-error { display: block; min-height: 17px; margin-top: 5px; color: var(--ui-danger); font-size: 11px; line-height: 1.5; }
 .cx-providers-advanced-body .cx-providers-form-grid { padding-top: 13px; }
 :root[data-theme="dark"] .cx-providers-advanced { border-color: var(--cx-dark-border); }
 :root[data-theme="dark"] .cx-providers-advanced-body { border-top-color: var(--cx-dark-border); }

@@ -195,7 +195,7 @@ pub(crate) struct SavedProvider {
 }
 
 pub(crate) const MIN_STREAM_IDLE_TIMEOUT_MS: i64 = 1_000;
-pub(crate) const MAX_STREAM_IDLE_TIMEOUT_MS: i64 = 600_000;
+pub(crate) const MAX_STREAM_IDLE_TIMEOUT_MS: i64 = 86_400_000;
 pub(crate) const MAX_STREAM_MAX_RETRIES: u32 = 10;
 
 fn validate_stream_fields(provider: &SavedProvider) -> Result<()> {
@@ -623,7 +623,29 @@ pub(crate) fn list_saved_providers_on_connection(conn: &Connection) -> Result<Ve
 
 pub(crate) fn list_saved_providers_inner() -> Result<Vec<SavedProvider>> {
     let conn = open_db()?;
-    list_saved_providers_on_connection(&conn)
+    let mut providers = list_saved_providers_on_connection(&conn)?;
+    // The live config, not the stored row, is the truth for the provider Codex is
+    // using right now. Stream knobs added by hand or on the TOML page would
+    // otherwise stay invisible in the editor and get dropped on the next save.
+    // A missing or unreadable live file must never break the provider list.
+    if let Ok(codex_dir) = resolve_codex_dir(None) {
+        if let Ok(Some(live)) = super::detected_live_custom_provider(&codex_dir) {
+            if let Ok(matches) = matching_saved_provider_ids_for_live_on_connection(
+                &conn,
+                &codex_dir,
+                &live,
+                &providers,
+            ) {
+                for provider in providers.iter_mut() {
+                    if matches.contains(&provider.id) {
+                        provider.stream_idle_timeout_ms = live.stream_idle_timeout_ms;
+                        provider.stream_max_retries = live.stream_max_retries;
+                    }
+                }
+            }
+        }
+    }
+    Ok(providers)
 }
 
 fn validate_provider_card_order(order: &[String]) -> Result<()> {

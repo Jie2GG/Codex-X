@@ -2024,7 +2024,7 @@ function App() {
       return;
     }
     if (!validateStreamSettings(pendingProvider).valid) {
-      setError(lang === "zh" ? "请先修正高级参数（等待超时 1000-600000 毫秒，重试 0-10 次）" : "Correct the advanced settings (wait timeout 1000-600000 ms, retries 0-10)");
+      setError(lang === "zh" ? "请先修正高级选项（等待超时 1000-86400000 毫秒，重试 0-10 次）" : "Correct the advanced options (wait timeout 1000-86400000 ms, retries 0-10)");
       return;
     }
     if (!pendingProvider.providerName || !pendingProvider.baseUrl || !pendingProvider.model) {

@@ -30,6 +30,8 @@ impl Fixture {
                 upstream_api: None,
                 requires_openai_auth: false,
                 model_mappings: vec![],
+                stream_idle_timeout_ms: None,
+                stream_max_retries: None,
             };
             providers.push(crate::providers::save_provider_inner(provider).unwrap());
         }

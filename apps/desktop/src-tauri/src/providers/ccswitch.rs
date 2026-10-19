@@ -437,6 +437,8 @@ pub(crate) fn build_ccswitch_codex_provider(
         requires_openai_auth: section.requires_openai_auth,
         upstream_api,
         model_mappings: Vec::new(),
+        stream_idle_timeout_ms: None,
+        stream_max_retries: None,
     }))
 }
 
@@ -851,7 +853,7 @@ mod tests {
     #[test]
     fn refreshing_old_native_input_keeps_the_local_protocol_but_an_explicit_choice_replaces_it() {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE providers (id TEXT PRIMARY KEY,provider_name TEXT NOT NULL,base_url TEXT NOT NULL,model TEXT NOT NULL,api_key TEXT,toml_config TEXT,wire_api TEXT NOT NULL,requires_openai_auth INTEGER NOT NULL,model_mappings_json TEXT NOT NULL,upstream_api TEXT,source TEXT NOT NULL,source_id TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);").unwrap();
+        conn.execute_batch("CREATE TABLE providers (id TEXT PRIMARY KEY,provider_name TEXT NOT NULL,base_url TEXT NOT NULL,model TEXT NOT NULL,api_key TEXT,toml_config TEXT,wire_api TEXT NOT NULL,requires_openai_auth INTEGER NOT NULL,model_mappings_json TEXT NOT NULL,upstream_api TEXT,source TEXT NOT NULL,source_id TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,stream_idle_timeout_ms INTEGER,stream_max_retries INTEGER);").unwrap();
         let original = normalize_saved_provider(
             build_ccswitch_codex_provider(&protocol_row(Some("openai_chat")), &HashMap::new())
                 .unwrap()

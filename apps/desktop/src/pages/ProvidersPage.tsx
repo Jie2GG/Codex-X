@@ -70,7 +70,30 @@ export type ProviderFormValue = {
   wireApi: string;
   upstreamApi?: string | null;
   requiresOpenaiAuth: boolean;
+  streamIdleTimeoutMs?: number | null;
+  streamMaxRetries?: number | null;
 };
+
+export const MIN_STREAM_IDLE_TIMEOUT_MS = 1_000;
+export const MAX_STREAM_IDLE_TIMEOUT_MS = 600_000;
+export const MAX_STREAM_MAX_RETRIES = 10;
+
+export type StreamSettingsErrors = { idle?: string; retries?: string };
+
+export function validateStreamSettings(
+  form: Pick<ProviderFormValue, "streamIdleTimeoutMs" | "streamMaxRetries">,
+): { valid: boolean; errors: StreamSettingsErrors } {
+  const errors: StreamSettingsErrors = {};
+  const idle = form.streamIdleTimeoutMs;
+  const retries = form.streamMaxRetries;
+  if (idle != null && (!Number.isInteger(idle) || idle < MIN_STREAM_IDLE_TIMEOUT_MS || idle > MAX_STREAM_IDLE_TIMEOUT_MS)) {
+    errors.idle = "range";
+  }
+  if (retries != null && (!Number.isInteger(retries) || retries < 0 || retries > MAX_STREAM_MAX_RETRIES)) {
+    errors.retries = "range";
+  }
+  return { valid: !errors.idle && !errors.retries, errors };
+}
 
 export type OfficialFormValue = {
   providerName: string;
@@ -203,6 +226,8 @@ export type ProvidersPageProps = {
   onFetchModels: () => void;
   onUpstreamApiChange: (value: string) => void;
   onRequiresAuthChange: (value: boolean) => void;
+  onStreamIdleTimeoutChange: (value: number | null) => void;
+  onStreamMaxRetriesChange: (value: number | null) => void;
   onToggleApiKeyVisibility: () => void;
   onProviderTomlDraftChange: (value: string) => void;
   onProviderHeadersConfigChange: (value: string) => void;
@@ -860,12 +885,14 @@ function ProviderForm({
   onFetchModels,
   onUpstreamApiChange,
   onRequiresAuthChange,
+  onStreamIdleTimeoutChange,
+  onStreamMaxRetriesChange,
   onToggleApiKeyVisibility,
   onProviderTomlDraftChange,
   onProviderHeadersConfigChange,
   onCopyProviderToml,
   onSaveProvider,
-}: Pick<ProvidersPageProps, "lang" | "copy" | "creatingProvider" | "selectedPresetId" | "selectedPresetVariantId" | "onPresetSelect" | "onPresetVariantSelect" | "providerForm" | "providerModelMappings" | "onProviderModelMappingsChange" | "loading" | "editingProviderId" | "providerAuthPreview" | "providerTomlDraft" | "providerTomlPreview" | "providerTomlRef" | "apiKeyVisible" | "availableModels" | "fetchingModels" | "onCancelMode" | "onApiKeyChange" | "onBaseUrlChange" | "onProviderNameChange" | "onProviderModelChange" | "onFetchModels" | "onUpstreamApiChange" | "onRequiresAuthChange" | "onToggleApiKeyVisibility" | "onProviderTomlDraftChange" | "onProviderHeadersConfigChange" | "onCopyProviderToml" | "onSaveProvider">) {
+}: Pick<ProvidersPageProps, "lang" | "copy" | "creatingProvider" | "selectedPresetId" | "selectedPresetVariantId" | "onPresetSelect" | "onPresetVariantSelect" | "providerForm" | "providerModelMappings" | "onProviderModelMappingsChange" | "loading" | "editingProviderId" | "providerAuthPreview" | "providerTomlDraft" | "providerTomlPreview" | "providerTomlRef" | "apiKeyVisible" | "availableModels" | "fetchingModels" | "onCancelMode" | "onApiKeyChange" | "onBaseUrlChange" | "onProviderNameChange" | "onProviderModelChange" | "onFetchModels" | "onUpstreamApiChange" | "onRequiresAuthChange" | "onStreamIdleTimeoutChange" | "onStreamMaxRetriesChange" | "onToggleApiKeyVisibility" | "onProviderTomlDraftChange" | "onProviderHeadersConfigChange" | "onCopyProviderToml" | "onSaveProvider">) {
   const [contextWindowBusy, setContextWindowBusy] = useState(false);
   const [headersBusy, setHeadersBusy] = useState(false);
   const [headersValid, setHeadersValid] = useState(true);
@@ -873,6 +900,9 @@ function ProviderForm({
   const canFetchModels = Boolean(providerForm.baseUrl.trim());
   const formBusy = loading || fetchingModels || contextWindowBusy || headersBusy;
   const mappingsValid = validateProviderModelMappings(providerModelMappings, providerForm.model, lang).valid;
+  const streamValidation = validateStreamSettings(providerForm);
+  const streamIdleLabel = lang === "zh" ? "流式空闲超时（毫秒）" : "Stream idle timeout (ms)";
+  const streamRetriesLabel = lang === "zh" ? "流式重试次数" : "Stream max retries";
 
   return (
     <>
@@ -979,6 +1009,53 @@ function ProviderForm({
       />
 
       <section className="cx-providers-form-section">
+        <div className="cx-providers-section-heading"><div><h3>{lang === "zh" ? "流式传输" : "Streaming"}</h3><p>{lang === "zh" ? "按供应商覆盖 Codex 的流式空闲超时与重试次数；留空则沿用 Codex 默认。" : "Override Codex's streaming idle timeout and retries for this provider. Leave a field empty to keep the Codex default."}</p></div></div>
+        <div className="cx-providers-form-grid">
+          <Field label={streamIdleLabel}>
+            <input
+              type="number"
+              aria-label={streamIdleLabel}
+              min={MIN_STREAM_IDLE_TIMEOUT_MS}
+              max={MAX_STREAM_IDLE_TIMEOUT_MS}
+              step={1000}
+              inputMode="numeric"
+              placeholder={lang === "zh" ? "留空使用 Codex 默认" : "Empty uses the Codex default"}
+              value={providerForm.streamIdleTimeoutMs ?? ""}
+              onChange={(event) => {
+                const raw = event.target.value.trim();
+                onStreamIdleTimeoutChange(raw === "" ? null : Number(raw));
+              }}
+              disabled={formBusy}
+            />
+            {streamValidation.errors.idle && (
+              <span className="cx-provider-mappings-error">{lang === "zh" ? `须为 ${MIN_STREAM_IDLE_TIMEOUT_MS} 至 ${MAX_STREAM_IDLE_TIMEOUT_MS} 之间的整数毫秒` : `Must be a whole number between ${MIN_STREAM_IDLE_TIMEOUT_MS} and ${MAX_STREAM_IDLE_TIMEOUT_MS} milliseconds`}</span>
+            )}
+          </Field>
+          <Field label={streamRetriesLabel}>
+            <input
+              type="number"
+              aria-label={streamRetriesLabel}
+              min={0}
+              max={MAX_STREAM_MAX_RETRIES}
+              step={1}
+              inputMode="numeric"
+              placeholder={lang === "zh" ? "留空使用 Codex 默认" : "Empty uses the Codex default"}
+              value={providerForm.streamMaxRetries ?? ""}
+              onChange={(event) => {
+                const raw = event.target.value.trim();
+                onStreamMaxRetriesChange(raw === "" ? null : Number(raw));
+              }}
+              disabled={formBusy}
+            />
+            {streamValidation.errors.retries && (
+              <span className="cx-provider-mappings-error">{lang === "zh" ? `须为 0 至 ${MAX_STREAM_MAX_RETRIES} 之间的整数` : `Must be a whole number between 0 and ${MAX_STREAM_MAX_RETRIES}`}</span>
+            )}
+          </Field>
+        </div>
+        <p className="cx-providers-mappings-field-hint">{lang === "zh" ? "开启本地路由接管期间，流式重试由 Codex-X 路由代管，此处重试次数暂不生效，关闭接管后自动恢复。" : "While the local router takeover is active, streaming retries are owned by the Codex-X router and this value pauses; it applies again once the direct route is restored."}</p>
+      </section>
+
+      <section className="cx-providers-form-section">
         <div className="cx-providers-section-heading"><div><h3>{copy.authPreviewTitle}</h3><p>{copy.authPreviewDescription}</p></div></div>
         <div className="cx-providers-preview">{providerAuthPreview}</div>
       </section>
@@ -998,7 +1075,8 @@ function ProviderForm({
       <div className="cx-providers-form-actions cx-providers-form-actions--save">
         {!headersValid && <span className="cx-provider-mappings-save-hint">{lang === "zh" ? "请先修正请求头中的错误。" : "Correct the HTTP header errors before saving."}</span>}
         {!mappingsValid && <span className="cx-provider-mappings-save-hint">{lang === "zh" ? "请先修正模型映射中的错误。" : "Correct the model mapping errors before saving."}</span>}
-        <button type="button" className="cx-providers-button cx-providers-button--primary" onClick={onSaveProvider} disabled={formBusy || !mappingsValid || !headersValid}>
+        {!streamValidation.valid && <span className="cx-provider-mappings-save-hint">{lang === "zh" ? "请先修正流式传输参数的错误。" : "Correct the streaming settings errors before saving."}</span>}
+        <button type="button" className="cx-providers-button cx-providers-button--primary" onClick={onSaveProvider} disabled={formBusy || !mappingsValid || !headersValid || !streamValidation.valid}>
           {loading ? <Loader2 size={15} className="cx-providers-spin" aria-hidden="true" /> : <CheckCircle2 size={15} aria-hidden="true" />}
           {loading ? copy.savingLabel : copy.saveLabel}
         </button>

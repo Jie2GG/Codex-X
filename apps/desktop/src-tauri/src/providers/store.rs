@@ -186,6 +186,34 @@ pub(crate) struct SavedProvider {
     pub(crate) requires_openai_auth: bool,
     #[serde(default)]
     pub(crate) model_mappings: Vec<super::model_catalog::ProviderModelMapping>,
+    /// Codex-native per-provider streaming knobs. None means the key stays out of
+    /// the provider table so Codex keeps its own default.
+    #[serde(default)]
+    pub(crate) stream_idle_timeout_ms: Option<i64>,
+    #[serde(default)]
+    pub(crate) stream_max_retries: Option<u32>,
+}
+
+pub(crate) const MIN_STREAM_IDLE_TIMEOUT_MS: i64 = 1_000;
+pub(crate) const MAX_STREAM_IDLE_TIMEOUT_MS: i64 = 600_000;
+pub(crate) const MAX_STREAM_MAX_RETRIES: u32 = 10;
+
+fn validate_stream_fields(provider: &SavedProvider) -> Result<()> {
+    if let Some(value) = provider.stream_idle_timeout_ms {
+        if !(MIN_STREAM_IDLE_TIMEOUT_MS..=MAX_STREAM_IDLE_TIMEOUT_MS).contains(&value) {
+            return Err(CodexxError::Config(format!(
+                "stream_idle_timeout_ms 须为 {MIN_STREAM_IDLE_TIMEOUT_MS} 至 {MAX_STREAM_IDLE_TIMEOUT_MS} 之间的整数毫秒"
+            )));
+        }
+    }
+    if let Some(value) = provider.stream_max_retries {
+        if value > MAX_STREAM_MAX_RETRIES {
+            return Err(CodexxError::Config(format!(
+                "stream_max_retries 须为 0 至 {MAX_STREAM_MAX_RETRIES} 之间的整数"
+            )));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -548,6 +576,10 @@ fn saved_provider_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SavedPro
                 Box::new(error),
             )
         })?,
+        stream_idle_timeout_ms: row.get(10)?,
+        stream_max_retries: row
+            .get::<_, Option<i64>>(11)?
+            .and_then(|value| u32::try_from(value).ok()),
     })
 }
 
@@ -555,7 +587,8 @@ fn stored_providers_on_connection(conn: &Connection) -> Result<Vec<StoredProvide
     let mut stmt = conn
         .prepare(
             "SELECT id, provider_name, base_url, model, api_key, toml_config, wire_api,
-                    requires_openai_auth, model_mappings_json, upstream_api, created_at, updated_at, source, source_id
+                    requires_openai_auth, model_mappings_json, upstream_api,
+                    stream_idle_timeout_ms, stream_max_retries, created_at, updated_at, source, source_id
              FROM providers
              ORDER BY created_at ASC, rowid ASC",
         )
@@ -564,10 +597,10 @@ fn stored_providers_on_connection(conn: &Connection) -> Result<Vec<StoredProvide
         .query_map([], |row| {
             Ok(StoredProvider {
                 provider: saved_provider_from_row(row)?,
-                created_at: row.get(10)?,
-                updated_at: row.get(11)?,
-                source: row.get(12)?,
-                source_id: row.get(13)?,
+                created_at: row.get(12)?,
+                updated_at: row.get(13)?,
+                source: row.get(14)?,
+                source_id: row.get(15)?,
             })
         })
         .map_err(|e| CodexxError::Database(e.to_string()))?;
@@ -688,7 +721,8 @@ pub(crate) fn provider_by_id_on_connection(
     let mut stmt = conn
         .prepare(
             "SELECT id, provider_name, base_url, model, api_key, toml_config, wire_api,
-                    requires_openai_auth, model_mappings_json, upstream_api
+                    requires_openai_auth, model_mappings_json, upstream_api,
+                    stream_idle_timeout_ms, stream_max_retries
              FROM providers WHERE id = ?1 LIMIT 1",
         )
         .map_err(|e| CodexxError::Database(e.to_string()))?;
@@ -723,8 +757,9 @@ fn write_provider_with_origin(
     conn.execute(
         "INSERT INTO providers
             (id, provider_name, base_url, model, api_key, toml_config, wire_api,
-             requires_openai_auth, model_mappings_json, upstream_api, source, source_id, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)
+             requires_openai_auth, model_mappings_json, upstream_api, source, source_id, created_at, updated_at,
+             stream_idle_timeout_ms, stream_max_retries)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13, ?14, ?15)
          ON CONFLICT(id) DO UPDATE SET
             provider_name = excluded.provider_name,
             base_url = excluded.base_url,
@@ -735,6 +770,8 @@ fn write_provider_with_origin(
             requires_openai_auth = excluded.requires_openai_auth,
             model_mappings_json = excluded.model_mappings_json,
             upstream_api = excluded.upstream_api,
+            stream_idle_timeout_ms = excluded.stream_idle_timeout_ms,
+            stream_max_retries = excluded.stream_max_retries,
             source = CASE
                 WHEN excluded.source_id IS NULL THEN providers.source
                 ELSE excluded.source
@@ -758,6 +795,8 @@ fn write_provider_with_origin(
             source,
             source_id,
             now,
+            provider.stream_idle_timeout_ms,
+            provider.stream_max_retries.map(|value| value as i64),
         ],
     )
     .map_err(|e| CodexxError::Database(e.to_string()))?;
@@ -821,6 +860,12 @@ fn merge_authoritative_import(
     // format selection. Keep the app metadata unless the import supplies one.
     if incoming.upstream_api.is_none() {
         incoming.upstream_api = existing.upstream_api.clone();
+    }
+    if incoming.stream_idle_timeout_ms.is_none() {
+        incoming.stream_idle_timeout_ms = existing.stream_idle_timeout_ms;
+    }
+    if incoming.stream_max_retries.is_none() {
+        incoming.stream_max_retries = existing.stream_max_retries;
     }
     incoming
 }
@@ -995,6 +1040,13 @@ fn apply_provider_toml_authority(provider: &mut SavedProvider) -> Result<()> {
     let requires_openai_auth = table
         .get("requires_openai_auth")
         .and_then(|item| item.as_bool());
+    let stream_idle_timeout_ms = table
+        .get("stream_idle_timeout_ms")
+        .and_then(|item| item.as_integer());
+    let stream_max_retries = table
+        .get("stream_max_retries")
+        .and_then(|item| item.as_integer())
+        .and_then(|value| u32::try_from(value).ok());
     let toml_api_key = experimental_bearer_token_from_doc(&doc, Some(&provider_id));
 
     if let Some(model) = model {
@@ -1015,6 +1067,10 @@ fn apply_provider_toml_authority(provider: &mut SavedProvider) -> Result<()> {
     if provider.api_key.is_none() {
         provider.api_key = toml_api_key;
     }
+    // The provider table owns these keys: an absent key means unset, so the
+    // record must not keep a stale value that the template no longer carries.
+    provider.stream_idle_timeout_ms = stream_idle_timeout_ms;
+    provider.stream_max_retries = stream_max_retries;
 
     strip_provider_bearer_tokens(&mut doc);
     provider.toml_config = Some(doc.to_string().trim_end().to_string());
@@ -1115,6 +1171,18 @@ fn sync_provider_toml_from_fields(provider: &mut SavedProvider) -> Result<()> {
     table["base_url"] = value(provider.base_url.clone());
     table["wire_api"] = value(provider.wire_api.clone());
     table["requires_openai_auth"] = value(provider.requires_openai_auth);
+    match provider.stream_idle_timeout_ms {
+        Some(timeout) => table["stream_idle_timeout_ms"] = value(timeout),
+        None => {
+            table.remove("stream_idle_timeout_ms");
+        }
+    }
+    match provider.stream_max_retries {
+        Some(retries) => table["stream_max_retries"] = value(retries as i64),
+        None => {
+            table.remove("stream_max_retries");
+        }
+    }
     provider.toml_config = Some(provider_template_from_document(
         &doc,
         &provider_id,
@@ -1152,6 +1220,8 @@ pub(crate) fn normalize_saved_provider(provider: SavedProvider) -> Result<SavedP
         upstream_api: provider.upstream_api,
         requires_openai_auth: provider.requires_openai_auth,
         model_mappings,
+        stream_idle_timeout_ms: provider.stream_idle_timeout_ms,
+        stream_max_retries: provider.stream_max_retries,
     };
     if normalized.provider_name.is_empty() {
         return Err(CodexxError::Config("供应商名称不能为空".to_string()));
@@ -1171,6 +1241,7 @@ pub(crate) fn normalize_saved_provider(provider: SavedProvider) -> Result<SavedP
     // reach this path. For an explicit user edit, the latest form fields win
     // while the full TOML (comments, MCP, projects, desktop settings, etc.) is
     // retained verbatim apart from the standard provider fields.
+    validate_stream_fields(&normalized)?;
     normalize_provider_upstream_api(&mut normalized)?;
     sync_provider_toml_from_fields(&mut normalized)?;
     Ok(normalized)
@@ -1276,6 +1347,8 @@ fn duplicate_provider_on_connection(
                 detected.id = original.id.clone();
                 detected.model_mappings = original.model_mappings.clone();
                 detected.upstream_api = original.upstream_api.clone();
+                detected.stream_idle_timeout_ms = original.stream_idle_timeout_ms;
+                detected.stream_max_retries = original.stream_max_retries;
                 if detected.api_key.is_none() {
                     detected.api_key = original.api_key.clone();
                 }
@@ -1404,8 +1477,9 @@ fn insert_stored_provider(conn: &Connection, stored: &StoredProvider) -> Result<
     conn.execute(
         "INSERT INTO providers
             (id, provider_name, base_url, model, api_key, toml_config, wire_api,
-             requires_openai_auth, model_mappings_json, upstream_api, source, source_id, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+             requires_openai_auth, model_mappings_json, upstream_api, source, source_id, created_at, updated_at,
+             stream_idle_timeout_ms, stream_max_retries)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         params![
             provider.id,
             provider.provider_name,
@@ -1421,6 +1495,8 @@ fn insert_stored_provider(conn: &Connection, stored: &StoredProvider) -> Result<
             stored.source_id,
             stored.created_at,
             stored.updated_at,
+            provider.stream_idle_timeout_ms,
+            provider.stream_max_retries.map(|value| value as i64),
         ],
     )
     .map_err(|error| CodexxError::Database(error.to_string()))?;
@@ -1734,7 +1810,8 @@ command = "fixture-server"
                 upstream_api TEXT,
                 source TEXT NOT NULL DEFAULT 'manual',
                 source_id TEXT,
-                created_at TEXT NOT NULL, updated_at TEXT NOT NULL);",
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                stream_idle_timeout_ms INTEGER, stream_max_retries INTEGER);",
         )
         .expect("create providers table");
         conn
@@ -1752,6 +1829,8 @@ command = "fixture-server"
             requires_openai_auth: true,
             upstream_api: None,
             model_mappings: Vec::new(),
+            stream_idle_timeout_ms: None,
+            stream_max_retries: None,
         }
     }
 
@@ -2738,6 +2817,8 @@ enabled = true
             requires_openai_auth: false,
             upstream_api: None,
             model_mappings: Vec::new(),
+            stream_idle_timeout_ms: None,
+            stream_max_retries: None,
         };
         let result = upsert_ccswitch_provider_on_connection(&conn, missing, "cc-row")
             .expect("fill missing import fields from the existing source row");
@@ -3105,5 +3186,68 @@ request_max_retries = 9
         item.model = "gpt-5.5".to_string();
         let error = normalize_saved_provider(item).expect_err("placeholder must be rejected");
         assert!(error.to_string().contains("示例占位值"));
+    }
+
+    #[test]
+    fn stream_settings_roundtrip_through_toml_and_the_store() {
+        let conn = test_connection();
+        let mut original = provider("stream-roundtrip", "Stream Roundtrip", Some("fixture-key"));
+        original.toml_config = Some(
+            "model_provider = \"custom\"\nmodel = \"gpt-5.5\"\n\n[model_providers.custom]\nname = \"Stream Roundtrip\"\nbase_url = \"https://example.com/v1\"\nwire_api = \"responses\"\nrequires_openai_auth = true\n"
+                .to_string(),
+        );
+        original.stream_idle_timeout_ms = Some(300_000);
+        original.stream_max_retries = Some(5);
+        let saved = save_manual_provider_on_connection(&conn, original).unwrap();
+        assert_eq!(saved.stream_idle_timeout_ms, Some(300_000));
+        assert_eq!(saved.stream_max_retries, Some(5));
+        let toml = saved.toml_config.as_deref().unwrap().to_string();
+        assert!(toml.contains("stream_idle_timeout_ms = 300000"), "{toml}");
+        assert!(toml.contains("stream_max_retries = 5"), "{toml}");
+
+        let reread = provider_by_id_on_connection(&conn, &saved.id)
+            .unwrap()
+            .expect("saved row");
+        assert_eq!(reread.stream_idle_timeout_ms, Some(300_000));
+        assert_eq!(reread.stream_max_retries, Some(5));
+
+        // The provider table stays authoritative: a row whose columns were
+        // wiped still hydrates the knobs from its own template.
+        conn.execute(
+            "UPDATE providers SET stream_idle_timeout_ms = NULL, stream_max_retries = NULL WHERE id = ?1",
+            [&saved.id],
+        )
+        .unwrap();
+        let hydrated = provider_by_id_on_connection(&conn, &saved.id)
+            .unwrap()
+            .expect("row after the columns were wiped");
+        assert_eq!(hydrated.stream_idle_timeout_ms, Some(300_000));
+        assert_eq!(hydrated.stream_max_retries, Some(5));
+
+        // Clearing both knobs in the form removes the keys from the template
+        // again, so Codex falls back to its own defaults.
+        let mut cleared = hydrated;
+        cleared.stream_idle_timeout_ms = None;
+        cleared.stream_max_retries = None;
+        let cleared = save_manual_provider_on_connection(&conn, cleared).unwrap();
+        let toml = cleared.toml_config.as_deref().unwrap().to_string();
+        assert!(!toml.contains("stream_idle_timeout_ms"), "{toml}");
+        assert!(!toml.contains("stream_max_retries"), "{toml}");
+        let reread = provider_by_id_on_connection(&conn, &saved.id)
+            .unwrap()
+            .expect("cleared row");
+        assert_eq!(reread.stream_idle_timeout_ms, None);
+        assert_eq!(reread.stream_max_retries, None);
+
+        // Out-of-range values are rejected on save with an actionable message.
+        let mut too_small = saved.clone();
+        too_small.stream_idle_timeout_ms = Some(999);
+        let error = normalize_saved_provider(too_small).expect_err("below the floor");
+        assert!(error.to_string().contains("stream_idle_timeout_ms"), "{error}");
+
+        let mut too_many = saved.clone();
+        too_many.stream_max_retries = Some(11);
+        let error = normalize_saved_provider(too_many).expect_err("above the ceiling");
+        assert!(error.to_string().contains("stream_max_retries"), "{error}");
     }
 }

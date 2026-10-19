@@ -267,6 +267,18 @@ fn initialize_schema(conn: &Connection) -> Result<()> {
         "upstream_api",
         "ALTER TABLE providers ADD COLUMN upstream_api TEXT",
     )?;
+    ensure_sqlite_column(
+        conn,
+        "providers",
+        "stream_idle_timeout_ms",
+        "ALTER TABLE providers ADD COLUMN stream_idle_timeout_ms INTEGER",
+    )?;
+    ensure_sqlite_column(
+        conn,
+        "providers",
+        "stream_max_retries",
+        "ALTER TABLE providers ADD COLUMN stream_max_retries INTEGER",
+    )?;
     conn.execute_batch(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_providers_source_identity
          ON providers(source, source_id)

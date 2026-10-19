@@ -585,6 +585,13 @@ pub(crate) fn detected_live_custom_provider(codex_dir: &Path) -> Result<Option<S
         requires_openai_auth: section.requires_openai_auth,
         upstream_api: None,
         model_mappings: Vec::new(),
+        stream_idle_timeout_ms: provider_table
+            .get("stream_idle_timeout_ms")
+            .and_then(Item::as_integer),
+        stream_max_retries: provider_table
+            .get("stream_max_retries")
+            .and_then(Item::as_integer)
+            .and_then(|value| u32::try_from(value).ok()),
     }))
 }
 
@@ -825,6 +832,18 @@ pub(crate) fn build_provider_toml_draft_with_origin_inner(
     table["base_url"] = value(provider.base_url.trim().trim_end_matches('/'));
     table["wire_api"] = value(provider.wire_api.trim());
     table["requires_openai_auth"] = value(provider.requires_openai_auth);
+    match provider.stream_idle_timeout_ms {
+        Some(timeout) => table["stream_idle_timeout_ms"] = value(timeout),
+        None => {
+            table.remove("stream_idle_timeout_ms");
+        }
+    }
+    match provider.stream_max_retries {
+        Some(retries) => table["stream_max_retries"] = value(retries as i64),
+        None => {
+            table.remove("stream_max_retries");
+        }
+    }
     provider.toml_config = Some(doc.to_string().trim_end().to_string());
 
     normalize_saved_provider(provider)?
@@ -1888,6 +1907,8 @@ requires_openai_auth = false
             requires_openai_auth: false,
             upstream_api: None,
             model_mappings: Vec::new(),
+            stream_idle_timeout_ms: None,
+            stream_max_retries: None,
         }
     }
 
@@ -2377,6 +2398,8 @@ command = "docs-server"
                 requires_openai_auth: false,
                 upstream_api: None,
                 model_mappings: Vec::new(),
+                stream_idle_timeout_ms: None,
+                stream_max_retries: None,
             },
             Some(codex_dir.display().to_string()),
         )
@@ -2422,8 +2445,60 @@ command = "docs-server"
                 .as_table()
                 .is_none_or(|table| table.get("experimental_bearer_token").is_none())));
         assert!(!draft.contains("sk-b"));
+        // Unset stream knobs stay out of the draft so Codex keeps its defaults.
+        assert!(doc["model_providers"]["custom"]
+            .get("stream_idle_timeout_ms")
+            .is_none());
+        assert!(doc["model_providers"]["custom"]
+            .get("stream_max_retries")
+            .is_none());
 
         fs::remove_dir_all(codex_dir).expect("remove draft test directory");
+    }
+
+    #[test]
+    fn provider_toml_draft_writes_stream_knobs_when_the_form_sets_them() {
+        let codex_dir = active_provider_test_dir("stream-draft", 40_003);
+        let current = r#"model_provider = "custom"
+model = "model-a"
+
+[model_providers.custom]
+name = "Provider A"
+base_url = "https://a.example.com/v1"
+wire_api = "responses"
+requires_openai_auth = false
+"#;
+        write_text(&config_path(&codex_dir), current).expect("write live config");
+        let draft = build_provider_toml_draft_inner(
+            SavedProvider {
+                id: "provider-b".to_string(),
+                provider_name: "Provider B".to_string(),
+                base_url: "https://b.example.com/v1".to_string(),
+                model: "model-b".to_string(),
+                api_key: None,
+                toml_config: None,
+                wire_api: "responses".to_string(),
+                requires_openai_auth: false,
+                upstream_api: None,
+                model_mappings: Vec::new(),
+                stream_idle_timeout_ms: Some(300_000),
+                stream_max_retries: Some(5),
+            },
+            Some(codex_dir.display().to_string()),
+        )
+        .expect("build the stream draft");
+        let doc = draft
+            .parse::<DocumentMut>()
+            .expect("parse the stream draft");
+        assert_eq!(
+            doc["model_providers"]["custom"]["stream_idle_timeout_ms"].as_integer(),
+            Some(300_000)
+        );
+        assert_eq!(
+            doc["model_providers"]["custom"]["stream_max_retries"].as_integer(),
+            Some(5)
+        );
+        fs::remove_dir_all(codex_dir).expect("remove stream draft test directory");
     }
 
     #[test]

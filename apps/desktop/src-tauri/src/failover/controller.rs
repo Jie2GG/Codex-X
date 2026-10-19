@@ -335,6 +335,9 @@ fn proxy_table(original: &Table, journal: &ProxyJournal) -> Result<Table> {
     table["wire_api"] = value("responses");
     table["supports_websockets"] = value(false);
     table["requires_openai_auth"] = value(journal.official);
+    // Retries and failover belong to the local router while the takeover is
+    // active, so Codex must not retry on top of them. The user's own stream
+    // settings live on in journal.original_table and return on restore.
     table["request_max_retries"] = value(0);
     table["stream_max_retries"] = value(0);
     let mut headers = Table::new();

@@ -16,7 +16,7 @@ import { OverviewPage } from "./pages/OverviewPage";
 import { AboutPage, SettingsPage, TomlConfigPage } from "./pages/UtilityPages";
 import { PromptsPage } from "./pages/PromptsPage";
 import { SkillsMcpPage, type SkillsMcpNoteKind } from "./pages/SkillsMcpPage";
-import { ProvidersPage, type ProviderCopy, type ProviderRow } from "./pages/ProvidersPage";
+import { ProvidersPage, validateStreamSettings, type ProviderCopy, type ProviderRow } from "./pages/ProvidersPage";
 import { AppShell, type AppTab, type AppTheme } from "./components/AppShell";
 import {
   AppToast,
@@ -135,6 +135,8 @@ const defaultProviderForm: SavedProvider = {
   wireApi: "responses",
   upstreamApi: "responses",
   requiresOpenaiAuth: false,
+  streamIdleTimeoutMs: null,
+  streamMaxRetries: null,
 };
 
 const blankProviderForm: SavedProvider = {
@@ -147,6 +149,8 @@ const blankProviderForm: SavedProvider = {
   wireApi: "responses",
   upstreamApi: "responses",
   requiresOpenaiAuth: false,
+  streamIdleTimeoutMs: null,
+  streamMaxRetries: null,
 };
 
 const blankPromptForm: SavedPrompt = {
@@ -575,7 +579,7 @@ function buildProviderTomlPreview(provider: SavedProvider) {
   const baseUrl = provider.baseUrl.trim().replace(/\/+$/, "");
   if (!model || !name || !baseUrl) return "";
   const wireApi = "responses";
-  return [
+  const lines = [
     `model_provider = "${tomlEscape(providerKey)}"`,
     `model = "${tomlEscape(model)}"`,
     "",
@@ -585,7 +589,11 @@ function buildProviderTomlPreview(provider: SavedProvider) {
     `wire_api = "${tomlEscape(wireApi)}"`,
     `requires_openai_auth = ${provider.requiresOpenaiAuth ? "true" : "false"}`,
     `supports_websockets = false`,
-  ].join("\n");
+  ];
+  // Unset stream knobs stay out of the template so Codex keeps its own defaults.
+  if (provider.streamIdleTimeoutMs != null) lines.push(`stream_idle_timeout_ms = ${provider.streamIdleTimeoutMs}`);
+  if (provider.streamMaxRetries != null) lines.push(`stream_max_retries = ${provider.streamMaxRetries}`);
+  return lines.join("\n");
 }
 
 function buildOfficialTomlPreview(model: string) {
@@ -2015,6 +2023,10 @@ function App() {
       setError(lang === "zh" ? "请先修正模型映射中的错误" : "Correct the model mappings before saving");
       return;
     }
+    if (!validateStreamSettings(pendingProvider).valid) {
+      setError(lang === "zh" ? "请先修正流式传输参数（空闲超时 1000-600000 毫秒，重试 0-10 次）" : "Correct the streaming settings (idle timeout 1000-600000 ms, retries 0-10)");
+      return;
+    }
     if (!pendingProvider.providerName || !pendingProvider.baseUrl || !pendingProvider.model) {
       setError(lang === "zh"
         ? "请填写供应商名称与 API 请求地址，并获取模型列表或在模型映射中勾选默认模型"
@@ -3249,6 +3261,8 @@ function App() {
                   wireApi: "responses",
                   upstreamApi: providerUpstreamApi(providerForm),
                   requiresOpenaiAuth: providerForm.requiresOpenaiAuth,
+                  streamIdleTimeoutMs: providerForm.streamIdleTimeoutMs ?? null,
+                  streamMaxRetries: providerForm.streamMaxRetries ?? null,
                 }}
                 officialForm={officialForm}
                 officialAuthRef={officialAuthEditorRef}
@@ -3348,6 +3362,8 @@ function App() {
                   setProviderForm((current) => ({ ...current, upstreamApi: value, wireApi: "responses" }));
                 }}
                 onRequiresAuthChange={(value) => setProviderForm((current) => ({ ...current, requiresOpenaiAuth: value }))}
+                onStreamIdleTimeoutChange={(value) => setProviderForm((current) => ({ ...current, streamIdleTimeoutMs: value }))}
+                onStreamMaxRetriesChange={(value) => setProviderForm((current) => ({ ...current, streamMaxRetries: value }))}
                 onToggleApiKeyVisibility={() => setProviderApiKeyVisible((value) => !value)}
                 onProviderTomlDraftChange={handleProviderTemplateChange}
                 onProviderHeadersConfigChange={handleProviderTemplateChange}

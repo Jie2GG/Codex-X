@@ -42,6 +42,10 @@ export type SavedProvider = {
   upstreamApi?: string | null;
   requiresOpenaiAuth: boolean;
   modelMappings?: ProviderModelMapping[];
+  // Codex-native per-provider streaming knobs. null/undefined keeps the key out
+  // of the provider table so Codex applies its own default.
+  streamIdleTimeoutMs?: number | null;
+  streamMaxRetries?: number | null;
 };
 
 export type OfficialProfileSummary = {

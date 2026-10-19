@@ -94,7 +94,7 @@ function formProps(lang, protocol = "responses", overrides = {}) {
     lang, mode: "form", creatingProvider: false, editingProviderId: "fixture-provider",
     selectedPresetId: "custom", selectedPresetVariantId: "custom",
     loading: false, fetchingModels: false, apiKeyVisible: false, availableModels: [],
-    providerForm: { providerName: "Fixture provider", baseUrl: "https://fixture.example/v1", apiKey: "", model: "fixture-model", wireApi: "responses", upstreamApi: protocol, requiresOpenaiAuth: false },
+    providerForm: { providerName: "Fixture provider", baseUrl: "https://fixture.example/v1", apiKey: "", model: "fixture-model", wireApi: "responses", upstreamApi: protocol, requiresOpenaiAuth: false, streamIdleTimeoutMs: null, streamMaxRetries: null },
     providerModelMappings: [], providerAuthPreview: "Fixture auth preview",
     providerTomlDraft: 'model_provider = "custom"\n[model_providers.custom]\nname = "Fixture provider"\nhttp_headers = { "X-Title" = "Fixture Project" }\n',
     providerTomlPreview: 'model_provider = "custom"\nmodel = "fixture-model"\n\n[mcp_servers.fixture]\ncommand = "fixture-server"\n\n[model_providers.custom]\nname = "Fixture provider"\nhttp_headers = { "X-Title" = "Fixture Project" }\n',
@@ -109,7 +109,7 @@ function formProps(lang, protocol = "responses", overrides = {}) {
     },
     onPresetSelect: noop, onPresetVariantSelect: noop, onProviderModelMappingsChange: noop, onCancelMode: noop,
     onApiKeyChange: noop, onBaseUrlChange: noop, onProviderNameChange: noop, onProviderModelChange: noop, onFetchModels: noop,
-    onUpstreamApiChange: noop, onRequiresAuthChange: noop, onToggleApiKeyVisibility: noop,
+    onUpstreamApiChange: noop, onRequiresAuthChange: noop, onStreamIdleTimeoutChange: noop, onStreamMaxRetriesChange: noop, onToggleApiKeyVisibility: noop,
     onProviderTomlDraftChange: noop, onProviderHeadersConfigChange: noop, onCopyProviderToml: noop, onSaveProvider: noop,
     ...overrides,
   };
@@ -361,5 +361,45 @@ for (const lang of ["zh", "en"]) {
     const error = elements(invalid, "small").find(({ attrs }) => attrs.id === bad.attrs["aria-describedby"]);
     assert.ok(error?.tag.includes(zh ? "请填写 1 至 99 的整数" : "Enter a whole number from 1 to 99"));
     assert.ok(invalid.includes(zh ? "请先修正模型映射中的错误" : "Correct the model mapping errors before saving"), "an impossible share blocks the save");
+  });
+
+  test(`streaming section keeps both knobs empty by default and explains the takeover (${lang})`, async () => {
+    const { ProvidersPage } = await ui();
+    const html = render(ProvidersPage, formProps(lang));
+    const idle = control(html, "input", zh ? "流式空闲超时（毫秒）" : "Stream idle timeout (ms)");
+    const retries = control(html, "input", zh ? "流式重试次数" : "Stream max retries");
+    assert.equal(idle.attrs.value, "", "an unset timeout keeps the Codex default");
+    assert.equal(retries.attrs.value, "", "an unset retry count keeps the Codex default");
+    assert.ok(idle.attrs.placeholder, "the timeout field explains that empty means the default");
+    assert.ok(retries.attrs.placeholder, "the retry field explains that empty means the default");
+    assert.ok(html.includes(zh ? "流式重试由 Codex-X 路由代管" : "retries are owned by the Codex-X router"),
+      "takeover lifetime is disclosed next to the retry knob");
+  });
+
+  test(`out-of-range streaming values show errors and block the save (${lang})`, async () => {
+    const { ProvidersPage, validateStreamSettings } = await ui();
+    assert.deepEqual(validateStreamSettings({ streamIdleTimeoutMs: null, streamMaxRetries: null }), { valid: true, errors: {} });
+    assert.equal(validateStreamSettings({ streamIdleTimeoutMs: 999 }).valid, false, "below the floor");
+    assert.equal(validateStreamSettings({ streamIdleTimeoutMs: 600_001 }).valid, false, "above the ceiling");
+    assert.equal(validateStreamSettings({ streamIdleTimeoutMs: 1234.5 }).valid, false, "fractional milliseconds");
+    assert.equal(validateStreamSettings({ streamMaxRetries: 0 }).valid, true, "zero retries is a legal explicit choice");
+    assert.equal(validateStreamSettings({ streamMaxRetries: 11 }).valid, false, "above the retry ceiling");
+
+    const idleLabel = zh ? "流式空闲超时（毫秒）" : "Stream idle timeout (ms)";
+    const retriesLabel = zh ? "流式重试次数" : "Stream max retries";
+    const filled = render(ProvidersPage, formProps(lang, "responses", {
+      providerForm: { ...formProps(lang).providerForm, streamIdleTimeoutMs: 300000, streamMaxRetries: 5 },
+    }));
+    assert.equal(control(filled, "input", idleLabel).attrs.value, "300000");
+    assert.equal(control(filled, "input", retriesLabel).attrs.value, "5");
+    assert.ok(!filled.includes(zh ? "请先修正流式传输参数的错误" : "Correct the streaming settings errors before saving"));
+
+    const invalid = render(ProvidersPage, formProps(lang, "responses", {
+      providerForm: { ...formProps(lang).providerForm, streamIdleTimeoutMs: 500, streamMaxRetries: 99 },
+    }));
+    assert.ok(invalid.includes(zh ? "请先修正流式传输参数的错误" : "Correct the streaming settings errors before saving"));
+    const save = elements(invalid, "button").find(({ tag }) => tag.includes(zh ? "保存供应商" : "Save provider"));
+    assert.ok(save, "the save button renders");
+    assert.notEqual(save.attrs.disabled, undefined, "an impossible timeout disables the save button");
   });
 }

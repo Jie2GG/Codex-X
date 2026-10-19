@@ -138,7 +138,9 @@ fn provider_test_connection() -> Connection {
                 source TEXT NOT NULL DEFAULT 'manual',
                 source_id TEXT,
                 created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                stream_idle_timeout_ms INTEGER,
+                stream_max_retries INTEGER
             );",
     )
     .expect("create providers table");
@@ -164,6 +166,8 @@ fn provider_fixture(
         upstream_api: None,
         requires_openai_auth: true,
         model_mappings: Vec::new(),
+        stream_idle_timeout_ms: None,
+        stream_max_retries: None,
     }
 }
 
@@ -968,6 +972,8 @@ wire_api = "responses"
         upstream_api: None,
         requires_openai_auth: true,
         model_mappings: Vec::new(),
+        stream_idle_timeout_ms: None,
+        stream_max_retries: None,
     };
     let live = second_toml.replace(
         "wire_api = \"responses\"",
@@ -1816,6 +1822,8 @@ requires_openai_auth = true
         upstream_api: None,
         requires_openai_auth: true,
         model_mappings: Vec::new(),
+        stream_idle_timeout_ms: None,
+        stream_max_retries: None,
     };
 
     let before = fs::read_to_string(config_path(&codex_dir)).expect("read live before preview");
@@ -1915,6 +1923,8 @@ enabled = true
             upstream_api: None,
             requires_openai_auth: true,
             model_mappings: Vec::new(),
+            stream_idle_timeout_ms: None,
+            stream_max_retries: None,
         },
         SavedProvider {
             id: provider_b_id.clone(),
@@ -1927,6 +1937,8 @@ enabled = true
             upstream_api: None,
             requires_openai_auth: true,
             model_mappings: Vec::new(),
+            stream_idle_timeout_ms: None,
+            stream_max_retries: None,
         },
     ] {
         save_provider_inner(provider).expect("save provider record");
@@ -2858,6 +2870,8 @@ requires_openai_auth = true
         upstream_api: None,
         requires_openai_auth: true,
         model_mappings: Vec::new(),
+        stream_idle_timeout_ms: None,
+        stream_max_retries: None,
     })
     .expect("save provider without stored key");
     write_text(&config_path(&codex_dir), provider_config).expect("write live provider config");
@@ -3329,6 +3343,8 @@ requires_openai_auth = true
         upstream_api: None,
         requires_openai_auth: true,
         model_mappings: Vec::new(),
+        stream_idle_timeout_ms: None,
+        stream_max_retries: None,
     };
     save_provider_inner(original.clone()).expect("save original provider");
     assert_eq!(

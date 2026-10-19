@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-10-19T02:01:38Z",
-  "updated_at": "2026-10-19T08:32:05Z",
+  "updated_at": "2026-10-19T08:56:33Z",
   "files": {
     ".gitattributes": {
       "role": "index",
@@ -77,9 +77,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "35a9787af8e8539da93f497061723c89c76df3d791b0518ca58d29637abad149",
-      "size": 80869,
-      "normalized_sha256": "35a9787af8e8539da93f497061723c89c76df3d791b0518ca58d29637abad149"
+      "sha256": "be9f60588b5f7b9a3bb293a482fd7ec5c1816f23553551218afbc9ffb7e2be8b",
+      "size": 80998,
+      "normalized_sha256": "be9f60588b5f7b9a3bb293a482fd7ec5c1816f23553551218afbc9ffb7e2be8b"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -519,9 +519,9 @@
     },
     "apps/desktop/src-tauri/src/providers/live.rs": {
       "role": "index",
-      "sha256": "b218644d885307409580cc808ec4e5c672ab09b2e2f2fa38cfbda685a60d56c8",
-      "size": 183263,
-      "normalized_sha256": "b218644d885307409580cc808ec4e5c672ab09b2e2f2fa38cfbda685a60d56c8"
+      "sha256": "be0564575761cd22ca3bae0ce5848e8b83a632ecac15a0cf06319bff8ce96949",
+      "size": 184198,
+      "normalized_sha256": "be0564575761cd22ca3bae0ce5848e8b83a632ecac15a0cf06319bff8ce96949"
     },
     "apps/desktop/src-tauri/src/providers/mod.rs": {
       "role": "index",
@@ -561,9 +561,9 @@
     },
     "apps/desktop/src-tauri/src/providers/store.rs": {
       "role": "index",
-      "sha256": "79a32285cad899d2e7ed4655e10819ade1208b3d72c0b3da39aff7625d0ea944",
-      "size": 129283,
-      "normalized_sha256": "79a32285cad899d2e7ed4655e10819ade1208b3d72c0b3da39aff7625d0ea944"
+      "sha256": "383891e980b9625ca8452b32ef7d75d8586f8c0e99f994b002436d55c3b381df",
+      "size": 130329,
+      "normalized_sha256": "383891e980b9625ca8452b32ef7d75d8586f8c0e99f994b002436d55c3b381df"
     },
     "apps/desktop/src-tauri/src/providers/transport.rs": {
       "role": "index",
@@ -897,9 +897,9 @@
     },
     "apps/desktop/src/main.tsx": {
       "role": "index",
-      "sha256": "e502f61c2b3e29a4b5361863c6d3d5f29f999af07324eb74589e45afa83bb8e2",
-      "size": 161017,
-      "normalized_sha256": "e502f61c2b3e29a4b5361863c6d3d5f29f999af07324eb74589e45afa83bb8e2"
+      "sha256": "868a778c72a441458082d71b9cd2e3e2c3fd1bed7f25c972cc19279dd00c81b9",
+      "size": 161020,
+      "normalized_sha256": "868a778c72a441458082d71b9cd2e3e2c3fd1bed7f25c972cc19279dd00c81b9"
     },
     "apps/desktop/src/officialPlan.ts": {
       "role": "index",
@@ -945,9 +945,9 @@
     },
     "apps/desktop/src/pages/ProvidersPage.tsx": {
       "role": "index",
-      "sha256": "b25cc88d235d33f8e062514c7230970d65fc74f73e075f40383a0068f52ab1f1",
-      "size": 52794,
-      "normalized_sha256": "b25cc88d235d33f8e062514c7230970d65fc74f73e075f40383a0068f52ab1f1"
+      "sha256": "c557884188ccdfb0589d403a2b4b2efff273f9dc2fed43bd316427c2625d80e7",
+      "size": 52578,
+      "normalized_sha256": "c557884188ccdfb0589d403a2b4b2efff273f9dc2fed43bd316427c2625d80e7"
     },
     "apps/desktop/src/pages/SessionManagementPage.tsx": {
       "role": "index",
@@ -1107,9 +1107,9 @@
     },
     "apps/desktop/src/styles/providers-page.css": {
       "role": "index",
-      "sha256": "3193c1f50354fc7c0742143c276f389ea1f4381bef40dc4655cd0dcc8babfc87",
-      "size": 27743,
-      "normalized_sha256": "3193c1f50354fc7c0742143c276f389ea1f4381bef40dc4655cd0dcc8babfc87"
+      "sha256": "d4f03c39651a0aa67449f97f389fa8fcc70d67e333c2960beaf5c9da32c912ac",
+      "size": 27974,
+      "normalized_sha256": "d4f03c39651a0aa67449f97f389fa8fcc70d67e333c2960beaf5c9da32c912ac"
     },
     "apps/desktop/src/styles/session-management.css": {
       "role": "index",
@@ -1215,9 +1215,9 @@
     },
     "apps/desktop/tests/providerEditorPresentation.test.mjs": {
       "role": "observe",
-      "sha256": "df68ae1c97689940a60983f0dfd9e9f257e389075c04697e28ce371138be84b4",
-      "size": 28181,
-      "normalized_sha256": "df68ae1c97689940a60983f0dfd9e9f257e389075c04697e28ce371138be84b4"
+      "sha256": "9543ea6162be4e9f6a4509f4d52edad1da52b180ebc6f001f51101f07e34c7c5",
+      "size": 28824,
+      "normalized_sha256": "9543ea6162be4e9f6a4509f4d52edad1da52b180ebc6f001f51101f07e34c7c5"
     },
     "apps/desktop/tests/providerHeaderPresets.test.mjs": {
       "role": "observe",

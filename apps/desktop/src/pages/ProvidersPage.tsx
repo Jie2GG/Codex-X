@@ -5,6 +5,7 @@ import {
   Activity,
   AlertTriangle,
   ArrowLeft,
+  ChevronDown,
   CheckCircle2,
   Copy,
   Download,
@@ -901,8 +902,11 @@ function ProviderForm({
   const formBusy = loading || fetchingModels || contextWindowBusy || headersBusy;
   const mappingsValid = validateProviderModelMappings(providerModelMappings, providerForm.model, lang).valid;
   const streamValidation = validateStreamSettings(providerForm);
-  const streamIdleLabel = lang === "zh" ? "流式空闲超时（毫秒）" : "Stream idle timeout (ms)";
-  const streamRetriesLabel = lang === "zh" ? "流式重试次数" : "Stream max retries";
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const streamIdleLabel = lang === "zh" ? "等待超时时间（毫秒）" : "Wait timeout (ms)";
+  const streamRetriesLabel = lang === "zh" ? "等待超时重试次数" : "Wait timeout retries";
+  // A collapsed disclosure must never hide a blocking error.
+  const advancedExpanded = advancedOpen || !streamValidation.valid;
 
   return (
     <>
@@ -985,6 +989,62 @@ function ProviderForm({
             disabled={formBusy}
           />
         </div>
+        <details
+          className="cx-providers-advanced"
+          open={advancedExpanded}
+          onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}
+        >
+          <summary>
+            <div><strong>{lang === "zh" ? "高级" : "Advanced"}<span>{lang === "zh" ? "可选" : "Optional"}</span></strong><p>{lang === "zh" ? "覆盖 Codex 的等待超时时间与重试次数；留空则沿用 Codex 默认。" : "Override Codex's wait timeout and retries for this provider. Leave a field empty to keep the Codex default."}</p></div>
+            {!streamValidation.valid && <span className="cx-providers-advanced-flag" aria-hidden="true" />}
+            <ChevronDown size={16} className="cx-providers-advanced-chevron" aria-hidden="true" />
+          </summary>
+          <div className="cx-providers-advanced-body">
+            <div className="cx-providers-form-grid">
+              <Field label={streamIdleLabel}>
+                <input
+                  type="number"
+                  aria-label={streamIdleLabel}
+                  min={MIN_STREAM_IDLE_TIMEOUT_MS}
+                  max={MAX_STREAM_IDLE_TIMEOUT_MS}
+                  step={1000}
+                  inputMode="numeric"
+                  placeholder={lang === "zh" ? "留空使用 Codex 默认" : "Empty uses the Codex default"}
+                  value={providerForm.streamIdleTimeoutMs ?? ""}
+                  onChange={(event) => {
+                    const raw = event.target.value.trim();
+                    onStreamIdleTimeoutChange(raw === "" ? null : Number(raw));
+                  }}
+                  disabled={formBusy}
+                />
+                {streamValidation.errors.idle && (
+                  <span className="cx-provider-mappings-error">{lang === "zh" ? `须为 ${MIN_STREAM_IDLE_TIMEOUT_MS} 至 ${MAX_STREAM_IDLE_TIMEOUT_MS} 之间的整数毫秒` : `Must be a whole number between ${MIN_STREAM_IDLE_TIMEOUT_MS} and ${MAX_STREAM_IDLE_TIMEOUT_MS} milliseconds`}</span>
+                )}
+              </Field>
+              <Field label={streamRetriesLabel}>
+                <input
+                  type="number"
+                  aria-label={streamRetriesLabel}
+                  min={0}
+                  max={MAX_STREAM_MAX_RETRIES}
+                  step={1}
+                  inputMode="numeric"
+                  placeholder={lang === "zh" ? "留空使用 Codex 默认" : "Empty uses the Codex default"}
+                  value={providerForm.streamMaxRetries ?? ""}
+                  onChange={(event) => {
+                    const raw = event.target.value.trim();
+                    onStreamMaxRetriesChange(raw === "" ? null : Number(raw));
+                  }}
+                  disabled={formBusy}
+                />
+                {streamValidation.errors.retries && (
+                  <span className="cx-provider-mappings-error">{lang === "zh" ? `须为 0 至 ${MAX_STREAM_MAX_RETRIES} 之间的整数` : `Must be a whole number between 0 and ${MAX_STREAM_MAX_RETRIES}`}</span>
+                )}
+              </Field>
+            </div>
+            <p className="cx-providers-mappings-field-hint">{lang === "zh" ? "开启本地路由接管期间，等待超时重试由 Codex-X 路由代管，此处重试次数暂不生效，关闭接管后自动恢复。" : "While the local router takeover is active, wait-timeout retries are owned by the Codex-X router and this value pauses; it applies again once the direct route is restored."}</p>
+          </div>
+        </details>
       </section>
 
       <ProviderHeadersControl
@@ -1009,53 +1069,6 @@ function ProviderForm({
       />
 
       <section className="cx-providers-form-section">
-        <div className="cx-providers-section-heading"><div><h3>{lang === "zh" ? "流式传输" : "Streaming"}</h3><p>{lang === "zh" ? "按供应商覆盖 Codex 的流式空闲超时与重试次数；留空则沿用 Codex 默认。" : "Override Codex's streaming idle timeout and retries for this provider. Leave a field empty to keep the Codex default."}</p></div></div>
-        <div className="cx-providers-form-grid">
-          <Field label={streamIdleLabel}>
-            <input
-              type="number"
-              aria-label={streamIdleLabel}
-              min={MIN_STREAM_IDLE_TIMEOUT_MS}
-              max={MAX_STREAM_IDLE_TIMEOUT_MS}
-              step={1000}
-              inputMode="numeric"
-              placeholder={lang === "zh" ? "留空使用 Codex 默认" : "Empty uses the Codex default"}
-              value={providerForm.streamIdleTimeoutMs ?? ""}
-              onChange={(event) => {
-                const raw = event.target.value.trim();
-                onStreamIdleTimeoutChange(raw === "" ? null : Number(raw));
-              }}
-              disabled={formBusy}
-            />
-            {streamValidation.errors.idle && (
-              <span className="cx-provider-mappings-error">{lang === "zh" ? `须为 ${MIN_STREAM_IDLE_TIMEOUT_MS} 至 ${MAX_STREAM_IDLE_TIMEOUT_MS} 之间的整数毫秒` : `Must be a whole number between ${MIN_STREAM_IDLE_TIMEOUT_MS} and ${MAX_STREAM_IDLE_TIMEOUT_MS} milliseconds`}</span>
-            )}
-          </Field>
-          <Field label={streamRetriesLabel}>
-            <input
-              type="number"
-              aria-label={streamRetriesLabel}
-              min={0}
-              max={MAX_STREAM_MAX_RETRIES}
-              step={1}
-              inputMode="numeric"
-              placeholder={lang === "zh" ? "留空使用 Codex 默认" : "Empty uses the Codex default"}
-              value={providerForm.streamMaxRetries ?? ""}
-              onChange={(event) => {
-                const raw = event.target.value.trim();
-                onStreamMaxRetriesChange(raw === "" ? null : Number(raw));
-              }}
-              disabled={formBusy}
-            />
-            {streamValidation.errors.retries && (
-              <span className="cx-provider-mappings-error">{lang === "zh" ? `须为 0 至 ${MAX_STREAM_MAX_RETRIES} 之间的整数` : `Must be a whole number between 0 and ${MAX_STREAM_MAX_RETRIES}`}</span>
-            )}
-          </Field>
-        </div>
-        <p className="cx-providers-mappings-field-hint">{lang === "zh" ? "开启本地路由接管期间，流式重试由 Codex-X 路由代管，此处重试次数暂不生效，关闭接管后自动恢复。" : "While the local router takeover is active, streaming retries are owned by the Codex-X router and this value pauses; it applies again once the direct route is restored."}</p>
-      </section>
-
-      <section className="cx-providers-form-section">
         <div className="cx-providers-section-heading"><div><h3>{copy.authPreviewTitle}</h3><p>{copy.authPreviewDescription}</p></div></div>
         <div className="cx-providers-preview">{providerAuthPreview}</div>
       </section>
@@ -1075,7 +1088,7 @@ function ProviderForm({
       <div className="cx-providers-form-actions cx-providers-form-actions--save">
         {!headersValid && <span className="cx-provider-mappings-save-hint">{lang === "zh" ? "请先修正请求头中的错误。" : "Correct the HTTP header errors before saving."}</span>}
         {!mappingsValid && <span className="cx-provider-mappings-save-hint">{lang === "zh" ? "请先修正模型映射中的错误。" : "Correct the model mapping errors before saving."}</span>}
-        {!streamValidation.valid && <span className="cx-provider-mappings-save-hint">{lang === "zh" ? "请先修正流式传输参数的错误。" : "Correct the streaming settings errors before saving."}</span>}
+        {!streamValidation.valid && <span className="cx-provider-mappings-save-hint">{lang === "zh" ? "请先修正高级参数中的错误。" : "Correct the advanced settings errors before saving."}</span>}
         <button type="button" className="cx-providers-button cx-providers-button--primary" onClick={onSaveProvider} disabled={formBusy || !mappingsValid || !headersValid || !streamValidation.valid}>
           {loading ? <Loader2 size={15} className="cx-providers-spin" aria-hidden="true" /> : <CheckCircle2 size={15} aria-hidden="true" />}
           {loading ? copy.savingLabel : copy.saveLabel}

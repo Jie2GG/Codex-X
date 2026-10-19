@@ -363,20 +363,24 @@ for (const lang of ["zh", "en"]) {
     assert.ok(invalid.includes(zh ? "请先修正模型映射中的错误" : "Correct the model mapping errors before saving"), "an impossible share blocks the save");
   });
 
-  test(`streaming section keeps both knobs empty by default and explains the takeover (${lang})`, async () => {
+  test(`the advanced disclosure starts collapsed with both wait-timeout knobs empty (${lang})`, async () => {
     const { ProvidersPage } = await ui();
     const html = render(ProvidersPage, formProps(lang));
-    const idle = control(html, "input", zh ? "流式空闲超时（毫秒）" : "Stream idle timeout (ms)");
-    const retries = control(html, "input", zh ? "流式重试次数" : "Stream max retries");
+    const advanced = html.match(/<details class="cx-providers-advanced"[^>]*>/);
+    assert.ok(advanced, "the API section ends with an advanced disclosure");
+    assert.doesNotMatch(advanced[0], /\bopen\b/, "advanced settings stay collapsed until the user opens them");
+    assert.ok(html.includes(zh ? "高级" : "Advanced"));
+    const idle = control(html, "input", zh ? "等待超时时间（毫秒）" : "Wait timeout (ms)");
+    const retries = control(html, "input", zh ? "等待超时重试次数" : "Wait timeout retries");
     assert.equal(idle.attrs.value, "", "an unset timeout keeps the Codex default");
     assert.equal(retries.attrs.value, "", "an unset retry count keeps the Codex default");
     assert.ok(idle.attrs.placeholder, "the timeout field explains that empty means the default");
     assert.ok(retries.attrs.placeholder, "the retry field explains that empty means the default");
-    assert.ok(html.includes(zh ? "流式重试由 Codex-X 路由代管" : "retries are owned by the Codex-X router"),
+    assert.ok(html.includes(zh ? "等待超时重试由 Codex-X 路由代管" : "wait-timeout retries are owned by the Codex-X router"),
       "takeover lifetime is disclosed next to the retry knob");
   });
 
-  test(`out-of-range streaming values show errors and block the save (${lang})`, async () => {
+  test(`out-of-range advanced values expand the disclosure and block the save (${lang})`, async () => {
     const { ProvidersPage, validateStreamSettings } = await ui();
     assert.deepEqual(validateStreamSettings({ streamIdleTimeoutMs: null, streamMaxRetries: null }), { valid: true, errors: {} });
     assert.equal(validateStreamSettings({ streamIdleTimeoutMs: 999 }).valid, false, "below the floor");
@@ -385,19 +389,23 @@ for (const lang of ["zh", "en"]) {
     assert.equal(validateStreamSettings({ streamMaxRetries: 0 }).valid, true, "zero retries is a legal explicit choice");
     assert.equal(validateStreamSettings({ streamMaxRetries: 11 }).valid, false, "above the retry ceiling");
 
-    const idleLabel = zh ? "流式空闲超时（毫秒）" : "Stream idle timeout (ms)";
-    const retriesLabel = zh ? "流式重试次数" : "Stream max retries";
+    const idleLabel = zh ? "等待超时时间（毫秒）" : "Wait timeout (ms)";
+    const retriesLabel = zh ? "等待超时重试次数" : "Wait timeout retries";
     const filled = render(ProvidersPage, formProps(lang, "responses", {
       providerForm: { ...formProps(lang).providerForm, streamIdleTimeoutMs: 300000, streamMaxRetries: 5 },
     }));
     assert.equal(control(filled, "input", idleLabel).attrs.value, "300000");
     assert.equal(control(filled, "input", retriesLabel).attrs.value, "5");
-    assert.ok(!filled.includes(zh ? "请先修正流式传输参数的错误" : "Correct the streaming settings errors before saving"));
+    assert.ok(!filled.includes(zh ? "请先修正高级参数中的错误" : "Correct the advanced settings errors before saving"));
+    const opened = filled.match(/<details class="cx-providers-advanced"[^>]*>/);
+    assert.doesNotMatch(opened[0], /\bopen\b/, "valid values never force the disclosure open");
 
     const invalid = render(ProvidersPage, formProps(lang, "responses", {
       providerForm: { ...formProps(lang).providerForm, streamIdleTimeoutMs: 500, streamMaxRetries: 99 },
     }));
-    assert.ok(invalid.includes(zh ? "请先修正流式传输参数的错误" : "Correct the streaming settings errors before saving"));
+    assert.ok(invalid.includes(zh ? "请先修正高级参数中的错误" : "Correct the advanced settings errors before saving"));
+    const forced = invalid.match(/<details class="cx-providers-advanced"[^>]*>/);
+    assert.match(forced[0], /\bopen\b/, "a blocking error auto-expands the disclosure");
     const save = elements(invalid, "button").find(({ tag }) => tag.includes(zh ? "保存供应商" : "Save provider"));
     assert.ok(save, "the save button renders");
     assert.notEqual(save.attrs.disabled, undefined, "an impossible timeout disables the save button");

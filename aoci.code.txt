@@ -19,6 +19,7 @@ release.yml[OV8L]: F:标签触发的三阶段发布流水线：prepare 校验版
 star-history.yml[OO4T]: F:每 15 分钟把仓库 star 快照 POST 到外部 star-history 接收端点，并 PURGE GitHub Camo 徽章缓存 | R:- | A:refresh | S:Camo PURGE 仅接受 camo.githubusercontent.com 的 URL；失败只警告并在下次刷新重试
 windows-installer-check.yml[OV6T]: F:在 codex/windows-updater-* 分支验证 Windows 更新迁移：跑前端与 Rust 测试，构建 debug NSIS 安装器做真实安装冒烟 | R:code:scripts/ensure-test-common-controls.ps1,code:scripts/windows-install-smoke.ps1,code:scripts/windows-dll-diagnostics.ps1 | A:windows-installer | S:安装器检查以 createUpdaterArtifacts:false 避免消耗发布签名凭据；cargo 测试须 --test-threads=1 且经 harness 注入 common controls 后直接运行测试可执行文件
 windows-msi-probe.yml[OV3T]: F:Windows runner 上按需 choco 安装 NSIS 后运行 MSI API 探针脚本 | R:code:scripts/windows-msi-probe.ps1 | A:msi-probe | S:-
+push-build.yml[OV6S]: F:push 到 main 触发的三平台自动编译线：prepare 创建或重置 continuous 滚动 pre-release 并清空旧资产，build 矩阵构建 macOS arm64、Linux、Windows 未签名安装包上传 | R:code:package.json,code:apps/desktop/src-tauri/tauri.conf.json,code:.github/workflows/release.yml | A:prepare,build | S:用临时 tauri.continuous.json 关掉 createUpdaterArtifacts，否则缺 updater 私钥时 tauri build 失败；continuous 不递增每次覆盖旧资产，且更新端点拒绝 prerelease 不会被应用内更新消费
 
 ===/Users/jiegg/Documents/Codex-X/apps/desktop/===
 index.html[EU7T]: F:Vite/Tauri 渲染层 HTML 入口：挂载 #root 并加载 /src/main.tsx | R:code:apps/desktop/public/theme-init.js,code:apps/desktop/src/main.tsx | A:- | S:theme-init.js 必须以普通 script 在模块加载前同步设置 data-theme，避免暗色主题首屏闪白；html lang=zh-CN

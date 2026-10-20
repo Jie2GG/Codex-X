@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-10-19T02:01:38Z",
-  "updated_at": "2026-10-20T01:15:58Z",
+  "updated_at": "2026-10-20T01:31:00Z",
   "files": {
     ".gitattributes": {
       "role": "index",
@@ -17,9 +17,9 @@
     },
     ".github/workflows/release.yml": {
       "role": "index",
-      "sha256": "0129d8f0ff67b543534307d4e8b23c181a5ebed8d18ae18a12a3e5a705e225ce",
-      "size": 21845,
-      "normalized_sha256": "0129d8f0ff67b543534307d4e8b23c181a5ebed8d18ae18a12a3e5a705e225ce"
+      "sha256": "c09d7175ee9b72bac28f0d3947fef56c6d5ed3eb7ceea377526b7eb7cabc929a",
+      "size": 23503,
+      "normalized_sha256": "c09d7175ee9b72bac28f0d3947fef56c6d5ed3eb7ceea377526b7eb7cabc929a"
     },
     ".github/workflows/star-history.yml": {
       "role": "index",
@@ -53,9 +53,9 @@
     },
     "CHANGELOG.md": {
       "role": "index",
-      "sha256": "ea77780a23d000c5d2e694a3d1d79dcfd3f34f4fa4fbff6e19392f55a879e58c",
-      "size": 27485,
-      "normalized_sha256": "ea77780a23d000c5d2e694a3d1d79dcfd3f34f4fa4fbff6e19392f55a879e58c"
+      "sha256": "561419b0bd49fd4f961c5b946a03f6386422c0194038990316ca453e498e06c3",
+      "size": 27624,
+      "normalized_sha256": "561419b0bd49fd4f961c5b946a03f6386422c0194038990316ca453e498e06c3"
     },
     "LICENSE": {
       "role": "index",
@@ -83,9 +83,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "6c5f4e5ae55e8366e7c2e6d98165940cc8042ba3d2ea4c5365cbada8999d9b85",
-      "size": 82488,
-      "normalized_sha256": "6c5f4e5ae55e8366e7c2e6d98165940cc8042ba3d2ea4c5365cbada8999d9b85"
+      "sha256": "303af2bf725a65228f88e7b0766d2b3d3f640d59b846ae394ff8bfa13875765b",
+      "size": 82606,
+      "normalized_sha256": "303af2bf725a65228f88e7b0766d2b3d3f640d59b846ae394ff8bfa13875765b"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -747,9 +747,9 @@
     },
     "apps/desktop/src-tauri/tauri.conf.json": {
       "role": "index",
-      "sha256": "3ee9d78a6ae5df426b2a333ced2372df26669d50d3ae61d6f97c50433d4c626c",
+      "sha256": "aa712578418785526d189c64fa66fb73ef0720224592945df95b9a863e496bd5",
       "size": 1888,
-      "normalized_sha256": "3ee9d78a6ae5df426b2a333ced2372df26669d50d3ae61d6f97c50433d4c626c"
+      "normalized_sha256": "aa712578418785526d189c64fa66fb73ef0720224592945df95b9a863e496bd5"
     },
     "apps/desktop/src/appUpdater.ts": {
       "role": "index",

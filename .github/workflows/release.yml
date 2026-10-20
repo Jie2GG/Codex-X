@@ -259,8 +259,52 @@ jobs:
           } finally { Pop-Location }
           if ($testExitCode -ne 0) { exit $testExitCode }
 
-      - name: Import Apple signing certificate and notarization key
+      - name: Detect Apple signing availability
         if: matrix.macos
+        id: apple_signing
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          required=(
+            APPLE_CERTIFICATE
+            APPLE_CERTIFICATE_PASSWORD
+            APPLE_SIGNING_IDENTITY
+            APPLE_TEAM_ID
+            APPLE_API_ISSUER
+            APPLE_API_KEY
+            APPLE_API_KEY_P8_BASE64
+            KEYCHAIN_PASSWORD
+          )
+          missing=()
+          for name in "${required[@]}"; do
+            [ -n "${!name:-}" ] || missing+=("$name")
+          done
+          if [ "${#missing[@]}" -eq 0 ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "Apple Developer ID signing secrets are complete"
+            # Only export the notarization inputs when they are real values: Tauri
+            # treats a present-but-empty APPLE_API_ISSUER as "notarize" and then
+            # fails with `--issuer ''` not being a valid UUID.
+            echo "APPLE_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY" >> "$GITHUB_ENV"
+            echo "APPLE_API_ISSUER=$APPLE_API_ISSUER" >> "$GITHUB_ENV"
+            echo "APPLE_API_KEY=$APPLE_API_KEY" >> "$GITHUB_ENV"
+            echo "APPLE_TEAM_ID=$APPLE_TEAM_ID" >> "$GITHUB_ENV"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "APPLE_SIGNING_IDENTITY=-" >> "$GITHUB_ENV"
+            echo "::warning::Missing Apple signing secrets (${missing[*]}); releasing ad-hoc signed macOS bundles without notarization"
+          fi
+
+      - name: Import Apple signing certificate and notarization key
+        if: matrix.macos && steps.apple_signing.outputs.enabled == 'true'
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -272,22 +316,6 @@ jobs:
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         run: |
           set -euo pipefail
-          required=(
-            APPLE_CERTIFICATE
-            APPLE_CERTIFICATE_PASSWORD
-            APPLE_API_ISSUER
-            APPLE_API_KEY
-            APPLE_API_KEY_P8_BASE64
-            APPLE_SIGNING_IDENTITY
-            APPLE_TEAM_ID
-            KEYCHAIN_PASSWORD
-          )
-          for name in "${required[@]}"; do
-            if [ -z "${!name:-}" ]; then
-              echo "Missing required repository secret: ${name}" >&2
-              exit 1
-            fi
-          done
           certificate_path="$RUNNER_TEMP/codex-x-developer-id.p12"
           api_key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8"
           keychain_path="$RUNNER_TEMP/codex-x-signing.keychain-db"
@@ -334,11 +362,8 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ matrix.macos && secrets.APPLE_SIGNING_IDENTITY || '' }}
-          APPLE_API_ISSUER: ${{ matrix.macos && secrets.APPLE_API_ISSUER || '' }}
-          APPLE_API_KEY: ${{ matrix.macos && secrets.APPLE_API_KEY || '' }}
-          APPLE_API_KEY_PATH: ${{ matrix.macos && env.APPLE_API_KEY_PATH || '' }}
-          APPLE_TEAM_ID: ${{ matrix.macos && secrets.APPLE_TEAM_ID || '' }}
+          # Apple signing/notarization variables come from GITHUB_ENV so that they
+          # stay absent, not empty, when the Developer ID secrets are not configured.
         with:
           releaseId: ${{ needs.prepare.outputs.release_id }}
           tagName: ${{ needs.prepare.outputs.tag }}
@@ -379,8 +404,13 @@ jobs:
           test -n "$app_path"
           test -n "$dmg_path"
           codesign --verify --deep --strict --verbose=2 "$app_path"
-          spctl --assess --type execute --verbose=4 "$app_path"
-          xcrun stapler validate "$app_path"
+          codesign -dvv "$app_path" 2>&1 | sed -n '1,12p' || true
+          if [ "${{ steps.apple_signing.outputs.enabled }}" = "true" ]; then
+            spctl --assess --type execute --verbose=4 "$app_path"
+            xcrun stapler validate "$app_path"
+          else
+            echo "::warning::macOS bundles are ad-hoc signed and not notarized; first launch needs right-click Open."
+          fi
           hdiutil verify "$dmg_path"
 
       - name: Create and upload Windows portable archive

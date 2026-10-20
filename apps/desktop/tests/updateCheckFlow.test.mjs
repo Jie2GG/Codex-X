@@ -5,7 +5,7 @@ import { releaseInfoFromFallback, releaseInfoFromCheckFailure } from "../src/upd
 
 const metadata = {
   latestVersion: "v0.3.24",
-  htmlUrl: "https://github.com/yynxxxxx/Codex-X/releases/tag/v0.3.24",
+  htmlUrl: "https://github.com/Jie2GG/Codex-X/releases/tag/v0.3.24",
   hasUpdate: true,
 };
 

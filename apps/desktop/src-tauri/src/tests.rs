@@ -736,7 +736,7 @@ fn github_catalog_discovers_new_markdown_without_a_hardcoded_id() {
                 name: "brand-new-prompt.md".to_string(),
                 kind: "file".to_string(),
                 download_url: Some(
-                    "https://raw.githubusercontent.com/yynxxxxx/Codex-X/main/examples/brand-new-prompt.md"
+                    "https://raw.githubusercontent.com/Jie2GG/Codex-X/main/examples/brand-new-prompt.md"
                         .to_string(),
                 ),
             },
@@ -749,7 +749,7 @@ fn github_catalog_discovers_new_markdown_without_a_hardcoded_id() {
                 name: "BRAND-NEW-PROMPT.MD".to_string(),
                 kind: "file".to_string(),
                 download_url: Some(
-                    "https://raw.githubusercontent.com/yynxxxxx/Codex-X/main/examples/BRAND-NEW-PROMPT.MD"
+                    "https://raw.githubusercontent.com/Jie2GG/Codex-X/main/examples/BRAND-NEW-PROMPT.MD"
                         .to_string(),
                 ),
             },
@@ -814,11 +814,11 @@ fn prompt_download_sources_are_cdn_first_and_encode_the_filename() {
     assert_eq!(sources.len(), 2);
     assert_eq!(
         sources[0],
-        format!("https://cdn.jsdelivr.net/gh/yynxxxxx/Codex-X@main/examples/{encoded}")
+        format!("https://cdn.jsdelivr.net/gh/Jie2GG/Codex-X@main/examples/{encoded}")
     );
     assert_eq!(
         sources[1],
-        format!("https://raw.githubusercontent.com/yynxxxxx/Codex-X/main/examples/{encoded}")
+        format!("https://raw.githubusercontent.com/Jie2GG/Codex-X/main/examples/{encoded}")
     );
 }
 

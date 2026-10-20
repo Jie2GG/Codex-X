@@ -80,7 +80,7 @@ const THEME_KEY = "codexx.theme";
 const STARTUP_WIZARD_SEEN_KEY = "codexx.startupWizardSeen";
 const ACTIVE_PROVIDER_KEY = "codexx.activeProviderId";
 const PROMPT_INJECTION_MODE_KEY = "codexx.promptInjectionMode";
-const FALLBACK_GITHUB_REPO = "yynxxxxx/Codex-X";
+const FALLBACK_GITHUB_REPO = "Jie2GG/Codex-X";
 const DEFAULT_OFFICIAL_PROFILE_ID = "openai-official";
 
 type ThemeTransitionDocument = Document & {

@@ -11,8 +11,8 @@ use std::time::Duration;
 use tauri::{Manager, Resource, ResourceId, Webview};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
-const GITHUB_LATEST: &str = "https://api.github.com/repos/yynxxxxx/Codex-X/releases/latest";
-const GITHUB_API_ASSETS: &str = "https://api.github.com/repos/yynxxxxx/Codex-X/releases/assets/";
+const GITHUB_LATEST: &str = "https://api.github.com/repos/Jie2GG/Codex-X/releases/latest";
+const GITHUB_API_ASSETS: &str = "https://api.github.com/repos/Jie2GG/Codex-X/releases/assets/";
 const METADATA_LIMIT: usize = 2 * 1024 * 1024;
 const DEFAULT_TIMEOUT_MS: u64 = 15_000;
 const MAX_TIMEOUT_MS: u64 = 30_000;
@@ -293,7 +293,7 @@ fn is_api_asset_url(url: &Url) -> bool {
         return false;
     };
     segments.len() == 6
-        && segments[..5] == ["repos", "yynxxxxx", "Codex-X", "releases", "assets"]
+        && segments[..5] == ["repos", "Jie2GG", "Codex-X", "releases", "assets"]
         && !segments[5].is_empty()
         && segments[5].bytes().all(|byte| byte.is_ascii_digit())
         && segments[5].parse::<u64>().is_ok_and(|id| id > 0)
@@ -316,7 +316,7 @@ fn download_identity(url: &Url) -> Option<DownloadIdentity> {
         return None;
     }
     let segments = url.path_segments()?.collect::<Vec<_>>();
-    if segments.len() != 6 || segments[..4] != ["yynxxxxx", "Codex-X", "releases", "download"] {
+    if segments.len() != 6 || segments[..4] != ["Jie2GG", "Codex-X", "releases", "download"] {
         return None;
     }
     let tag = percent_encoding::percent_decode_str(segments[4])
@@ -554,7 +554,7 @@ pub(crate) async fn discover_download_candidates(
     let Some(identity) = download_identity(&update.download_url) else {
         return Ok(Vec::new());
     };
-    let mut endpoint = Url::parse("https://api.github.com/repos/yynxxxxx/Codex-X/releases/tags/")
+    let mut endpoint = Url::parse("https://api.github.com/repos/Jie2GG/Codex-X/releases/tags/")
         .expect("fixed API URL");
     endpoint
         .path_segments_mut()
@@ -677,7 +677,7 @@ mod tests {
     use std::thread;
     use std::time::Instant;
 
-    const DOWNLOAD: &str = "https://github.com/yynxxxxx/Codex-X/releases/download/v0.3.24/Codex-X-0.3.24-windows-x64.exe";
+    const DOWNLOAD: &str = "https://github.com/Jie2GG/Codex-X/releases/download/v0.3.24/Codex-X-0.3.24-windows-x64.exe";
 
     struct FixtureReply {
         status: u16,
@@ -994,7 +994,7 @@ mod tests {
     }
     fn index() -> serde_json::Value {
         json!({"tag_name":"v0.3.24","draft":false,"prerelease":false,"assets":[
-            {"id":71,"name":"latest.json","state":"uploaded","browser_download_url":"https://github.com/yynxxxxx/Codex-X/releases/download/v0.3.24/latest.json"},
+            {"id":71,"name":"latest.json","state":"uploaded","browser_download_url":"https://github.com/Jie2GG/Codex-X/releases/download/v0.3.24/latest.json"},
             {"id":72,"name":"Codex-X-0.3.24-windows-x64.exe","state":"uploaded","browser_download_url":DOWNLOAD}
         ]})
     }
@@ -1051,7 +1051,7 @@ mod tests {
                     let endpoint = endpoint.unwrap();
                     assert_eq!(
                         endpoint.as_str(),
-                        "https://api.github.com/repos/yynxxxxx/Codex-X/releases/assets/71"
+                        "https://api.github.com/repos/Jie2GG/Codex-X/releases/assets/71"
                     );
                     assert!(is_api_asset_url(&endpoint));
                     // This seam injects only the SDK transport result. Map its
@@ -1069,7 +1069,7 @@ mod tests {
                         &client,
                         fixture
                             .root
-                            .join("repos/yynxxxxx/Codex-X/releases/latest")
+                            .join("repos/Jie2GG/Codex-X/releases/latest")
                             .unwrap(),
                     )
                     .await?,
@@ -1085,8 +1085,8 @@ mod tests {
         assert_eq!(checked.candidates, vec![api_asset_url(72).unwrap()]);
         let requests = fixture.requests.lock().unwrap();
         assert_eq!(requests.len(), 2);
-        assert!(requests[0].starts_with("GET /repos/yynxxxxx/Codex-X/releases/latest HTTP/1.1"));
-        assert!(requests[1].starts_with("GET /repos/yynxxxxx/Codex-X/releases/assets/71 HTTP/1.1"));
+        assert!(requests[0].starts_with("GET /repos/Jie2GG/Codex-X/releases/latest HTTP/1.1"));
+        assert!(requests[1].starts_with("GET /repos/Jie2GG/Codex-X/releases/assets/71 HTTP/1.1"));
         assert!(requests[1]
             .to_ascii_lowercase()
             .contains("accept: application/octet-stream"));
@@ -1164,11 +1164,11 @@ mod tests {
         );
         for url in [
             "https://github.com/other/Codex-X/releases/download/v0.3.24/asset.exe",
-            "https://github.com/yynxxxxx/Other/releases/download/v0.3.24/asset.exe",
-            "https://github.com.evil.test/yynxxxxx/Codex-X/releases/download/v0.3.24/asset.exe",
-            "https://secret@github.com/yynxxxxx/Codex-X/releases/download/v0.3.24/asset.exe",
-            "https://github.com/yynxxxxx/Codex-X/releases/download/v0.3.24/asset.exe?token=secret",
-            "http://github.com/yynxxxxx/Codex-X/releases/download/v0.3.24/asset.exe",
+            "https://github.com/Jie2GG/Other/releases/download/v0.3.24/asset.exe",
+            "https://github.com.evil.test/Jie2GG/Codex-X/releases/download/v0.3.24/asset.exe",
+            "https://secret@github.com/Jie2GG/Codex-X/releases/download/v0.3.24/asset.exe",
+            "https://github.com/Jie2GG/Codex-X/releases/download/v0.3.24/asset.exe?token=secret",
+            "http://github.com/Jie2GG/Codex-X/releases/download/v0.3.24/asset.exe",
         ] {
             assert!(download_identity(&Url::parse(url).unwrap()).is_none());
             assert!(
@@ -1214,13 +1214,13 @@ mod tests {
         assert!(is_api_asset_url(&api_asset_url(72).unwrap()));
         for url in [
             "https://api.github.com/repos/other/Codex-X/releases/assets/72",
-            "https://api.github.com/repos/yynxxxxx/Other/releases/assets/72",
-            "https://api.github.com/repos/yynxxxxx/Codex-X/releases/assets/0",
-            "https://api.github.com/repos/yynxxxxx/Codex-X/releases/assets/72/extra",
-            "https://api.github.com/repos/yynxxxxx/Codex-X/releases/assets/72?token=secret",
-            "https://user:secret@api.github.com/repos/yynxxxxx/Codex-X/releases/assets/72",
-            "https://api.github.com.evil.test/repos/yynxxxxx/Codex-X/releases/assets/72",
-            "http://api.github.com/repos/yynxxxxx/Codex-X/releases/assets/72",
+            "https://api.github.com/repos/Jie2GG/Other/releases/assets/72",
+            "https://api.github.com/repos/Jie2GG/Codex-X/releases/assets/0",
+            "https://api.github.com/repos/Jie2GG/Codex-X/releases/assets/72/extra",
+            "https://api.github.com/repos/Jie2GG/Codex-X/releases/assets/72?token=secret",
+            "https://user:secret@api.github.com/repos/Jie2GG/Codex-X/releases/assets/72",
+            "https://api.github.com.evil.test/repos/Jie2GG/Codex-X/releases/assets/72",
+            "http://api.github.com/repos/Jie2GG/Codex-X/releases/assets/72",
         ] {
             assert!(!is_api_asset_url(&Url::parse(url).unwrap()));
         }
@@ -1375,9 +1375,9 @@ mod tests {
 
     #[test]
     fn real_sdk_recovers_manifest_and_package_over_the_official_api_and_rejects_bad_signatures() {
-        const PRIMARY: &str = "/yynxxxxx/Codex-X/releases/latest/download/latest.json";
+        const PRIMARY: &str = "/Jie2GG/Codex-X/releases/latest/download/latest.json";
         const ORIGINAL_PACKAGE: &str =
-            "/yynxxxxx/Codex-X/releases/download/v0.3.24/Codex-X-0.3.24-windows-x64.exe";
+            "/Jie2GG/Codex-X/releases/download/v0.3.24/Codex-X-0.3.24-windows-x64.exe";
         let signed = sdk_test_fixture::signed_fixture();
         let payload = signed.payload();
         for corrupt in [false, true] {
@@ -1387,20 +1387,20 @@ mod tests {
             }
             let fixture = TlsFixture::new(vec![
                 TlsReply::unavailable(PRIMARY),
-                TlsReply::json("/repos/yynxxxxx/Codex-X/releases/latest", index()),
+                TlsReply::json("/repos/Jie2GG/Codex-X/releases/latest", index()),
                 TlsReply::json(
-                    "/repos/yynxxxxx/Codex-X/releases/assets/71",
+                    "/repos/Jie2GG/Codex-X/releases/assets/71",
                     signed.manifest(&Url::parse(DOWNLOAD).unwrap()),
                 ),
                 TlsReply::unavailable(ORIGINAL_PACKAGE),
-                TlsReply::binary("/repos/yynxxxxx/Codex-X/releases/assets/72", served),
+                TlsReply::binary("/repos/Jie2GG/Codex-X/releases/assets/72", served),
             ]);
             let app = sdk_test_fixture::mock_app();
             let calls = Arc::new(AtomicUsize::new(0));
             let checked = run(check_with_fallback(
                 |endpoint| {
                     let fallback = endpoint.is_some();
-                    let endpoint = endpoint.unwrap_or_else(|| Url::parse("https://github.com/yynxxxxx/Codex-X/releases/latest/download/latest.json").unwrap());
+                    let endpoint = endpoint.unwrap_or_else(|| Url::parse("https://github.com/Jie2GG/Codex-X/releases/latest/download/latest.json").unwrap());
                     if fallback { assert!(is_api_asset_url(&endpoint)); }
                     let mut builder = fixture.updater_builder(app.handle(), endpoint, Arc::clone(&calls));
                     if fallback {
@@ -1490,11 +1490,11 @@ mod tests {
                 signed.manifest(&Url::parse(DOWNLOAD).unwrap()),
             ),
             TlsReply::binary(
-                "/yynxxxxx/Codex-X/releases/download/v0.3.24/Codex-X-0.3.24-windows-x64.exe",
+                "/Jie2GG/Codex-X/releases/download/v0.3.24/Codex-X-0.3.24-windows-x64.exe",
                 payload.clone(),
             ),
             TlsReply::binary(
-                "/repos/yynxxxxx/Codex-X/releases/assets/72",
+                "/repos/Jie2GG/Codex-X/releases/assets/72",
                 payload.clone(),
             ),
         ]);
@@ -1537,6 +1537,6 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 3);
         let requests = fixture.requests.lock().unwrap();
         assert!(!requests[2].to_ascii_lowercase().contains("authorization:"));
-        assert!(requests[2].starts_with("GET /repos/yynxxxxx/Codex-X/releases/assets/72 HTTP/1.1"));
+        assert!(requests[2].starts_with("GET /repos/Jie2GG/Codex-X/releases/assets/72 HTTP/1.1"));
     }
 }

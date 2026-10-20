@@ -646,8 +646,8 @@ fn get_about_info_inner(config_dir: Option<String>) -> Result<AboutInfo> {
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         codex_version: platform::detect_codex_version(),
         codex_dir: codex_dir.display().to_string(),
-        project_url: "https://github.com/yynxxxxx/Codex-X".to_string(),
-        github_repo: "yynxxxxx/Codex-X".to_string(),
+        project_url: "https://github.com/Jie2GG/Codex-X".to_string(),
+        github_repo: "Jie2GG/Codex-X".to_string(),
         native_updater_supported,
     })
 }

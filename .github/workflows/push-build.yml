@@ -181,12 +181,18 @@ jobs:
           done
           if [ "${#missing[@]}" -eq 0 ]; then
             echo "enabled=true" >> "$GITHUB_OUTPUT"
-            printf 'identity=%s\n' "$APPLE_SIGNING_IDENTITY" >> "$GITHUB_OUTPUT"
             echo "Apple Developer ID signing secrets are complete"
+            # Only export the notarization inputs when they are real values: Tauri
+            # treats a present-but-empty APPLE_API_ISSUER as "notarize" and then
+            # fails with `--issuer ''` not being a UUID.
+            echo "APPLE_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY" >> "$GITHUB_ENV"
+            echo "APPLE_API_ISSUER=$APPLE_API_ISSUER" >> "$GITHUB_ENV"
+            echo "APPLE_API_KEY=$APPLE_API_KEY" >> "$GITHUB_ENV"
+            echo "APPLE_TEAM_ID=$APPLE_TEAM_ID" >> "$GITHUB_ENV"
           else
             echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "identity=-" >> "$GITHUB_OUTPUT"
-            echo "::warning::Missing Apple signing secrets (${missing[*]}); falling back to ad-hoc signing"
+            echo "APPLE_SIGNING_IDENTITY=-" >> "$GITHUB_ENV"
+            echo "::warning::Missing Apple signing secrets (${missing[*]}); falling back to ad-hoc signing without notarization"
           fi
 
       - name: Import Apple signing certificate and notarization key
@@ -232,12 +238,9 @@ jobs:
         # Pinned to tauri-action v1.0.0 because this step may receive Apple signing secrets.
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
+          # Apple signing/notarization variables come from GITHUB_ENV so that they
+          # are absent, not empty, when the secrets are not configured.
           GITHUB_TOKEN: ${{ github.token }}
-          APPLE_SIGNING_IDENTITY: ${{ matrix.macos && steps.apple_signing.outputs.identity || '' }}
-          APPLE_API_ISSUER: ${{ matrix.macos && steps.apple_signing.outputs.enabled == 'true' && secrets.APPLE_API_ISSUER || '' }}
-          APPLE_API_KEY: ${{ matrix.macos && steps.apple_signing.outputs.enabled == 'true' && secrets.APPLE_API_KEY || '' }}
-          APPLE_API_KEY_PATH: ${{ matrix.macos && steps.apple_signing.outputs.enabled == 'true' && env.APPLE_API_KEY_PATH || '' }}
-          APPLE_TEAM_ID: ${{ matrix.macos && steps.apple_signing.outputs.enabled == 'true' && secrets.APPLE_TEAM_ID || '' }}
         with:
           releaseId: ${{ needs.prepare.outputs.release_id }}
           tagName: continuous

@@ -50,7 +50,7 @@ jobs:
           - 提交: ${COMMIT_SHA}
           - 构建时间: $(date -u '+%Y-%m-%d %H:%M UTC')
 
-          注意: 这些构建未做 Apple 代码签名/公证，也没有 Tauri updater 签名；首次打开 macOS 应用可能需要右键选择打开。"
+          注意: 这些构建没有 Tauri updater 签名。macOS 构建在配齐 Apple 签名 secrets 时做 Developer ID 签名与公证，否则退化为 ad-hoc 签名；首次打开仍可能需要右键选择打开。"
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release edit "$tag" --prerelease --title "Codex-X continuous build" --notes "$body"
           else
@@ -91,12 +91,15 @@ jobs:
         include:
           - name: macOS Apple Silicon
             platform: macos-latest
+            macos: true
             bundles: app,dmg
           - name: Linux x64
             platform: ubuntu-22.04
+            macos: false
             bundles: deb,rpm,appimage
           - name: Windows x64
             platform: windows-latest
+            macos: false
             bundles: nsis
     steps:
       - name: Checkout
@@ -148,13 +151,122 @@ jobs:
           }
           JSON
 
+      - name: Detect Apple signing availability
+        if: matrix.macos
+        id: apple_signing
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          required=(
+            APPLE_CERTIFICATE
+            APPLE_CERTIFICATE_PASSWORD
+            APPLE_SIGNING_IDENTITY
+            APPLE_TEAM_ID
+            APPLE_API_ISSUER
+            APPLE_API_KEY
+            APPLE_API_KEY_P8_BASE64
+            KEYCHAIN_PASSWORD
+          )
+          missing=()
+          for name in "${required[@]}"; do
+            [ -n "${!name:-}" ] || missing+=("$name")
+          done
+          if [ "${#missing[@]}" -eq 0 ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            printf 'identity=%s\n' "$APPLE_SIGNING_IDENTITY" >> "$GITHUB_OUTPUT"
+            echo "Apple Developer ID signing secrets are complete"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "identity=-" >> "$GITHUB_OUTPUT"
+            echo "::warning::Missing Apple signing secrets (${missing[*]}); falling back to ad-hoc signing"
+          fi
+
+      - name: Import Apple signing certificate and notarization key
+        if: matrix.macos && steps.apple_signing.outputs.enabled == 'true'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          certificate_path="$RUNNER_TEMP/codex-x-developer-id.p12"
+          api_key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8"
+          keychain_path="$RUNNER_TEMP/codex-x-signing.keychain-db"
+
+          printf '%s' "$APPLE_CERTIFICATE" | base64 -D > "$certificate_path"
+          printf '%s' "$APPLE_API_KEY_P8_BASE64" | base64 -D > "$api_key_path"
+          chmod 600 "$certificate_path" "$api_key_path"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
+          security default-keychain -s "$keychain_path"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security import "$certificate_path" \
+            -k "$keychain_path" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "$KEYCHAIN_PASSWORD" \
+            "$keychain_path"
+          security find-identity -v -p codesigning "$keychain_path" \
+            | grep -F -- "$APPLE_SIGNING_IDENTITY" >/dev/null
+
+          echo "APPLE_API_KEY_PATH=$api_key_path" >> "$GITHUB_ENV"
+          echo "CODEXX_KEYCHAIN_PATH=$keychain_path" >> "$GITHUB_ENV"
+          echo "CODEXX_CERTIFICATE_PATH=$certificate_path" >> "$GITHUB_ENV"
+
       - name: Build and upload to the rolling prerelease
+        # Pinned to tauri-action v1.0.0 because this step may receive Apple signing secrets.
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          APPLE_SIGNING_IDENTITY: ${{ matrix.macos && steps.apple_signing.outputs.identity || '' }}
+          APPLE_API_ISSUER: ${{ matrix.macos && steps.apple_signing.outputs.enabled == 'true' && secrets.APPLE_API_ISSUER || '' }}
+          APPLE_API_KEY: ${{ matrix.macos && steps.apple_signing.outputs.enabled == 'true' && secrets.APPLE_API_KEY || '' }}
+          APPLE_API_KEY_PATH: ${{ matrix.macos && steps.apple_signing.outputs.enabled == 'true' && env.APPLE_API_KEY_PATH || '' }}
+          APPLE_TEAM_ID: ${{ matrix.macos && steps.apple_signing.outputs.enabled == 'true' && secrets.APPLE_TEAM_ID || '' }}
         with:
           releaseId: ${{ needs.prepare.outputs.release_id }}
           tagName: continuous
           projectPath: apps/desktop
           args: --config tauri.continuous.json --bundles ${{ matrix.bundles }}
           retryAttempts: 3
+
+      - name: Verify macOS code signature
+        if: matrix.macos
+        run: |
+          set -euo pipefail
+          app_path=$(find apps/desktop/src-tauri/target/release/bundle/macos -maxdepth 1 -type d -name '*.app' -print -quit)
+          dmg_path=$(find apps/desktop/src-tauri/target/release/bundle/dmg -maxdepth 1 -type f -name '*.dmg' -print -quit)
+          test -n "$app_path"
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+          codesign -dvv "$app_path" 2>&1 | sed -n '1,12p' || true
+          if [ "${{ steps.apple_signing.outputs.enabled }}" = "true" ]; then
+            test -n "$dmg_path"
+            spctl --assess --type execute --verbose=4 "$app_path"
+            xcrun stapler validate "$app_path"
+            hdiutil verify "$dmg_path"
+          else
+            echo "::warning::macOS build is ad-hoc signed and not notarized; Gatekeeper will require right-click Open on first launch."
+          fi
+
+      - name: Remove temporary Apple credentials
+        if: always() && matrix.macos
+        run: |
+          if [ -n "${CODEXX_KEYCHAIN_PATH:-}" ]; then
+            security delete-keychain "$CODEXX_KEYCHAIN_PATH" || true
+          fi
+          rm -f "${CODEXX_CERTIFICATE_PATH:-}" "${APPLE_API_KEY_PATH:-}"

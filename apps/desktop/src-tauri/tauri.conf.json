@@ -63,7 +63,7 @@
       "endpoints": [
         "https://github.com/Jie2GG/Codex-X/releases/latest/download/latest.json"
       ],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZCQTBEQkRFNTZCQjBBNUUKUldSZUNydFczdHVnYXkzSTM0N0F4UG5oV3BiVVJ0OEZwazdOd3hMRGRMNGJZaThoOEVneG9qb0cK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDlGRDc5Q0MzMzVFNTcxRTYKUldUbWNlVTF3NXpYbnpoRDUxTDd2KzdHRDdFeVVFQnlteW5RUWRSNEtRTmJoN3p6NDhndmdQb1YK",
       "windows": {
         "installMode": "passive"
       }

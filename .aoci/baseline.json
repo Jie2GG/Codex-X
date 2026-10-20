@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-10-19T02:01:38Z",
-  "updated_at": "2026-10-20T00:50:30Z",
+  "updated_at": "2026-10-20T01:15:58Z",
   "files": {
     ".gitattributes": {
       "role": "index",
@@ -11,9 +11,9 @@
     },
     ".github/workflows/push-build.yml": {
       "role": "index",
-      "sha256": "1ad922f9ab1ade9e515705d51f7c3b03d99d1d1ebbf285c9cfac72ded829aa5b",
-      "size": 10577,
-      "normalized_sha256": "1ad922f9ab1ade9e515705d51f7c3b03d99d1d1ebbf285c9cfac72ded829aa5b"
+      "sha256": "cd862102913a267662899aeff2336e1343aae6bf454a83cb5c1d0cc947d7406c",
+      "size": 10576,
+      "normalized_sha256": "cd862102913a267662899aeff2336e1343aae6bf454a83cb5c1d0cc947d7406c"
     },
     ".github/workflows/release.yml": {
       "role": "index",
@@ -53,9 +53,9 @@
     },
     "CHANGELOG.md": {
       "role": "index",
-      "sha256": "736155ba69a651d8315a4c7c049707fa93b870896063326b78b4b6119d556fa2",
-      "size": 27475,
-      "normalized_sha256": "736155ba69a651d8315a4c7c049707fa93b870896063326b78b4b6119d556fa2"
+      "sha256": "ea77780a23d000c5d2e694a3d1d79dcfd3f34f4fa4fbff6e19392f55a879e58c",
+      "size": 27485,
+      "normalized_sha256": "ea77780a23d000c5d2e694a3d1d79dcfd3f34f4fa4fbff6e19392f55a879e58c"
     },
     "LICENSE": {
       "role": "index",
@@ -83,9 +83,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "658a5adff1c71ce7d5aeeaca161fb83f185b675f6dddf1fca036b0a3cede8df2",
-      "size": 82493,
-      "normalized_sha256": "658a5adff1c71ce7d5aeeaca161fb83f185b675f6dddf1fca036b0a3cede8df2"
+      "sha256": "6c5f4e5ae55e8366e7c2e6d98165940cc8042ba3d2ea4c5365cbada8999d9b85",
+      "size": 82488,
+      "normalized_sha256": "6c5f4e5ae55e8366e7c2e6d98165940cc8042ba3d2ea4c5365cbada8999d9b85"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -107,9 +107,9 @@
     },
     "apps/desktop/package.json": {
       "role": "index",
-      "sha256": "661c371d5c7de092740b6ec0246a2c5a28c355ccf5a0163c6c638752e43f0302",
+      "sha256": "02464586a7ea749a202d02229f487e5be9706af22603e26d37fc4e552429b220",
       "size": 833,
-      "normalized_sha256": "661c371d5c7de092740b6ec0246a2c5a28c355ccf5a0163c6c638752e43f0302"
+      "normalized_sha256": "02464586a7ea749a202d02229f487e5be9706af22603e26d37fc4e552429b220"
     },
     "apps/desktop/public/openai.svg": {
       "role": "index",
@@ -173,15 +173,15 @@
     },
     "apps/desktop/src-tauri/Cargo.lock": {
       "role": "index",
-      "sha256": "e9ddef1adf690e65f71408301607f16bd004f012162528f4c6b4317f98b3e5af",
+      "sha256": "5c3dcdeb284e6e9ccb0d081bd5fff9db5765be1395c793d8b72b409cfe3ae50e",
       "size": 139786,
-      "normalized_sha256": "e9ddef1adf690e65f71408301607f16bd004f012162528f4c6b4317f98b3e5af"
+      "normalized_sha256": "5c3dcdeb284e6e9ccb0d081bd5fff9db5765be1395c793d8b72b409cfe3ae50e"
     },
     "apps/desktop/src-tauri/Cargo.toml": {
       "role": "index",
-      "sha256": "4b92aca1c5618c0564ac701663782c1148cc866dad90864c76f8c21fef8b2688",
+      "sha256": "943041e9a371bf4955a8cada3750a0dc02322d471c9492d6f0dc1f9d52fc6eab",
       "size": 1600,
-      "normalized_sha256": "4b92aca1c5618c0564ac701663782c1148cc866dad90864c76f8c21fef8b2688"
+      "normalized_sha256": "943041e9a371bf4955a8cada3750a0dc02322d471c9492d6f0dc1f9d52fc6eab"
     },
     "apps/desktop/src-tauri/build.rs": {
       "role": "index",
@@ -747,9 +747,9 @@
     },
     "apps/desktop/src-tauri/tauri.conf.json": {
       "role": "index",
-      "sha256": "d6980338f713132f9c4115b4b690905e0b554cc075df8ba1751ce3902cd20d5e",
+      "sha256": "3ee9d78a6ae5df426b2a333ced2372df26669d50d3ae61d6f97c50433d4c626c",
       "size": 1888,
-      "normalized_sha256": "d6980338f713132f9c4115b4b690905e0b554cc075df8ba1751ce3902cd20d5e"
+      "normalized_sha256": "3ee9d78a6ae5df426b2a333ced2372df26669d50d3ae61d6f97c50433d4c626c"
     },
     "apps/desktop/src/appUpdater.ts": {
       "role": "index",
@@ -1501,9 +1501,9 @@
     },
     "package.json": {
       "role": "index",
-      "sha256": "fcce6e80e92bfbebda0ede30f45923d72217919b518178e8aacccad67b6b6911",
+      "sha256": "4bc77c550cdcac19d67ff80dd33211f43cdde8810e7ebf5625a6a206abfa7114",
       "size": 389,
-      "normalized_sha256": "fcce6e80e92bfbebda0ede30f45923d72217919b518178e8aacccad67b6b6911"
+      "normalized_sha256": "4bc77c550cdcac19d67ff80dd33211f43cdde8810e7ebf5625a6a206abfa7114"
     },
     "pnpm-lock.yaml": {
       "role": "index",
